@@ -474,14 +474,176 @@ fn build_image_html(png_bytes: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(target_os = "windows")]
+struct WindowsClipboardSession;
+
+#[cfg(target_os = "windows")]
+impl WindowsClipboardSession {
+    fn open() -> Result<Self, String> {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::DataExchange::OpenClipboard;
+
+        unsafe { OpenClipboard(HWND::default()) }
+            .map_err(|error| format!("OpenClipboard failed: {error}"))?;
+        Ok(Self)
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsClipboardSession {
+    fn drop(&mut self) {
+        use windows::Win32::System::DataExchange::CloseClipboard;
+
+        let _ = unsafe { CloseClipboard() };
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct OwnedGlobalMemory {
+    handle: Option<windows::Win32::Foundation::HGLOBAL>,
+}
+
+#[cfg(target_os = "windows")]
+impl OwnedGlobalMemory {
+    fn copy_from(bytes: &[u8], label: &str) -> Result<Self, String> {
+        use windows::Win32::System::Memory::{
+            GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+        };
+
+        if bytes.is_empty() {
+            return Err(format!("{label} clipboard data is empty"));
+        }
+
+        let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes.len()) }
+            .map_err(|error| format!("GlobalAlloc {label} failed: {error}"))?;
+        let memory = Self {
+            handle: Some(handle),
+        };
+        let pointer = unsafe { GlobalLock(handle) };
+        if pointer.is_null() {
+            return Err(format!("GlobalLock {label} failed"));
+        }
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len());
+            let _ = GlobalUnlock(handle);
+        }
+        Ok(memory)
+    }
+
+    fn as_handle(&self) -> windows::Win32::Foundation::HANDLE {
+        windows::Win32::Foundation::HANDLE(
+            self.handle
+                .as_ref()
+                .expect("global memory was already transferred")
+                .0,
+        )
+    }
+
+    fn transfer_to_clipboard(mut self) {
+        self.handle = None;
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for OwnedGlobalMemory {
+    fn drop(&mut self) {
+        use windows::Win32::Foundation::GlobalFree;
+
+        if let Some(handle) = self.handle.take() {
+            let _ = unsafe { GlobalFree(handle) };
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_clipboard_bytes(format: u32, bytes: &[u8], label: &str) -> Result<(), String> {
+    use windows::Win32::System::DataExchange::SetClipboardData;
+
+    let memory = OwnedGlobalMemory::copy_from(bytes, label)?;
+    unsafe { SetClipboardData(format, memory.as_handle()) }
+        .map_err(|error| format!("SetClipboardData {label} failed: {error}"))?;
+    memory.transfer_to_clipboard();
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn build_clipboard_dib(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let width_i32 = i32::try_from(width).map_err(|_| "Image width is too large".to_string())?;
+    let height_i32 = i32::try_from(height).map_err(|_| "Image height is too large".to_string())?;
+    if width_i32 <= 0 || height_i32 <= 0 {
+        return Err("Image dimensions must be positive".to_string());
+    }
+
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| "Image dimensions overflow".to_string())?;
+    let rgba_len = pixel_count
+        .checked_mul(4)
+        .ok_or_else(|| "Image byte length overflow".to_string())?;
+    if rgba.len() != rgba_len {
+        return Err(format!(
+            "Invalid RGBA length: expected {rgba_len}, got {}",
+            rgba.len()
+        ));
+    }
+
+    let dib_size = 40usize
+        .checked_add(rgba_len)
+        .ok_or_else(|| "DIB allocation size overflow".to_string())?;
+    let image_size = u32::try_from(rgba_len)
+        .map_err(|_| "Image data is too large for a Windows DIB".to_string())?;
+    let top_down_height = height_i32
+        .checked_neg()
+        .ok_or_else(|| "Image height cannot be represented as a DIB".to_string())?;
+
+    let mut dib = vec![0u8; dib_size];
+    dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+    dib[4..8].copy_from_slice(&width_i32.to_le_bytes());
+    dib[8..12].copy_from_slice(&top_down_height.to_le_bytes());
+    dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+    dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+    dib[20..24].copy_from_slice(&image_size.to_le_bytes());
+
+    for (source, destination) in rgba.chunks_exact(4).zip(dib[40..].chunks_exact_mut(4)) {
+        destination.copy_from_slice(&[source[2], source[1], source[0], source[3]]);
+    }
+    Ok(dib)
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_clipboard_tests {
+    use super::build_clipboard_dib;
+
+    #[test]
+    fn builds_checked_top_down_bgra_dib() {
+        let dib = build_clipboard_dib(&[1, 2, 3, 4, 5, 6, 7, 8], 2, 1)
+            .expect("valid RGBA should produce a DIB");
+
+        assert_eq!(&dib[4..8], &2i32.to_le_bytes());
+        assert_eq!(&dib[8..12], &(-1i32).to_le_bytes());
+        assert_eq!(&dib[40..48], &[3, 2, 1, 4, 7, 6, 5, 8]);
+    }
+
+    #[test]
+    fn rejects_mismatched_rgba_length() {
+        assert!(build_clipboard_dib(&[0; 7], 2, 1).is_err());
+        assert!(build_clipboard_dib(&[], 0, 1).is_err());
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn write_image_to_clipboard(rgba: &[u8], w: u32, h: u32, png_bytes: &[u8]) -> Result<(), String> {
-    use windows::Win32::Foundation::{HANDLE, HWND};
-    use windows::Win32::System::DataExchange::*;
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::DataExchange::{EmptyClipboard, RegisterClipboardFormatW};
     use windows::Win32::UI::Shell::DROPFILES;
 
     const CF_DIB: u32 = 8;
     const CF_HDROP: u32 = 15;
+    const MAX_CLIPBOARD_PNG_BYTES: usize = 512 * 1024 * 1024;
+
+    let dib = build_clipboard_dib(rgba, w, h)?;
+    if png_bytes.is_empty() || png_bytes.len() > MAX_CLIPBOARD_PNG_BYTES {
+        return Err("PNG clipboard data has an invalid size".to_string());
+    }
 
     // Write PNG to a temp file for CF_HDROP
     let temp_png_path = {
@@ -498,73 +660,15 @@ fn write_image_to_clipboard(rgba: &[u8], w: u32, h: u32, png_bytes: &[u8]) -> Re
         .chain(std::iter::once(0u16))
         .collect();
 
+    let _clipboard = WindowsClipboardSession::open()?;
+    unsafe { EmptyClipboard() }.map_err(|error| format!("EmptyClipboard failed: {error}"))?;
+    set_clipboard_bytes(CF_DIB, &dib, "DIB")?;
+
     unsafe {
-        if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
-            return Err("OpenClipboard failed".to_string());
-        }
-        let _ = EmptyClipboard();
-
-        let dib_size = 40 + (w * h * 4) as usize;
-        let hmem_dib = GlobalAlloc(GMEM_MOVEABLE, dib_size).map_err(|e| {
-            let _ = CloseClipboard();
-            format!("GlobalAlloc DIB failed: {}", e)
-        })?;
-
-        let ptr_dib = GlobalLock(hmem_dib);
-        if ptr_dib.is_null() {
-            let _ = CloseClipboard();
-            return Err("GlobalLock DIB failed".to_string());
-        }
-
-        let bmi = ptr_dib as *mut u8;
-        // Zero the DIB header to avoid garbage biCompression / biClrUsed etc.
-        std::ptr::write_bytes(bmi, 0u8, 40);
-        let bmi_header = std::slice::from_raw_parts_mut(bmi as *mut u32, 10);
-        bmi_header[0] = 40;
-        bmi_header[1] = w;
-        bmi_header[2] = (-(h as i32)) as u32;
-        *(bmi.add(12) as *mut u16) = 1;
-        *(bmi.add(14) as *mut u16) = 32;
-        *(bmi.add(20) as *mut u32) = w * h * 4;
-
-        // Convert RGBA → BGRA (DIB expects BGRA pixel order)
-        let pixel_offset = 40;
-        let dst = bmi.add(pixel_offset);
-        let src = rgba.as_ptr();
-        for i in 0..(w * h) as usize {
-            *dst.add(i * 4) = *src.add(i * 4 + 2); // B = R
-            *dst.add(i * 4 + 1) = *src.add(i * 4 + 1); // G = G
-            *dst.add(i * 4 + 2) = *src.add(i * 4); // R = B
-            *dst.add(i * 4 + 3) = *src.add(i * 4 + 3); // A = A
-        }
-        let _ = GlobalUnlock(hmem_dib);
-
-        if SetClipboardData(CF_DIB, HANDLE(hmem_dib.0)).is_err() {
-            let _ = CloseClipboard();
-            return Err("SetClipboardData DIB failed".to_string());
-        }
-
         let png_format_name: Vec<u16> = "PNG\0".encode_utf16().collect();
         let cf_png = RegisterClipboardFormatW(windows::core::PCWSTR(png_format_name.as_ptr()));
         if cf_png != 0 {
-            let hmem_png = GlobalAlloc(GMEM_MOVEABLE, png_bytes.len()).map_err(|e| {
-                let _ = CloseClipboard();
-                format!("GlobalAlloc PNG failed: {}", e)
-            })?;
-
-            let ptr_png = GlobalLock(hmem_png);
-            if ptr_png.is_null() {
-                let _ = CloseClipboard();
-                return Err("GlobalLock PNG failed".to_string());
-            }
-
-            std::ptr::copy_nonoverlapping(png_bytes.as_ptr(), ptr_png as *mut u8, png_bytes.len());
-            let _ = GlobalUnlock(hmem_png);
-
-            if SetClipboardData(cf_png, HANDLE(hmem_png.0)).is_err() {
-                let _ = CloseClipboard();
-                return Err("SetClipboardData PNG failed".to_string());
-            }
+            set_clipboard_bytes(cf_png, png_bytes, "PNG")?;
         }
 
         // Write HTML format for Electron/Chromium-based apps (Feishu, DingTalk, etc.)
@@ -572,54 +676,32 @@ fn write_image_to_clipboard(rgba: &[u8], w: u32, h: u32, png_bytes: &[u8]) -> Re
         let html_format_name: Vec<u16> = "HTML Format\0".encode_utf16().collect();
         let cf_html = RegisterClipboardFormatW(windows::core::PCWSTR(html_format_name.as_ptr()));
         if cf_html != 0 {
-            let hmem_html = GlobalAlloc(GMEM_MOVEABLE, html_data.len()).map_err(|e| {
-                let _ = CloseClipboard();
-                format!("GlobalAlloc HTML failed: {}", e)
-            })?;
-            let ptr_html = GlobalLock(hmem_html);
-            if ptr_html.is_null() {
-                let _ = CloseClipboard();
-                return Err("GlobalLock HTML failed".to_string());
-            }
-            std::ptr::copy_nonoverlapping(html_data.as_ptr(), ptr_html as *mut u8, html_data.len());
-            let _ = GlobalUnlock(hmem_html);
-            if SetClipboardData(cf_html, HANDLE(hmem_html.0)).is_err() {
-                let _ = CloseClipboard();
-                return Err("SetClipboardData HTML failed".to_string());
-            }
+            set_clipboard_bytes(cf_html, &html_data, "HTML")?;
         }
 
         // Write CF_HDROP (temp file path) — required by Electron/Chromium apps
         {
             let dropfiles_size = std::mem::size_of::<DROPFILES>();
-            let path_bytes = wide_path.len() * std::mem::size_of::<u16>();
-            let data_size = dropfiles_size + path_bytes;
+            let path_bytes = wide_path
+                .len()
+                .checked_mul(std::mem::size_of::<u16>())
+                .ok_or_else(|| "HDROP path size overflow".to_string())?;
+            let data_size = dropfiles_size
+                .checked_add(path_bytes)
+                .ok_or_else(|| "HDROP allocation size overflow".to_string())?;
             let mut data: Vec<u8> = vec![0u8; data_size];
-            let df = data.as_mut_ptr() as *mut DROPFILES;
-            (*df).pFiles = dropfiles_size as u32;
-            (*df).pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-            (*df).fNC = windows::Win32::Foundation::BOOL(0);
-            (*df).fWide = windows::Win32::Foundation::BOOL(1);
-            let dest = data.as_mut_ptr().add(dropfiles_size) as *mut u16;
-            std::ptr::copy_nonoverlapping(wide_path.as_ptr(), dest, wide_path.len());
-            let hmem_drop = GlobalAlloc(GMEM_MOVEABLE, data_size).map_err(|e| {
-                let _ = CloseClipboard();
-                format!("GlobalAlloc HDROP failed: {}", e)
-            })?;
-            let ptr_drop = GlobalLock(hmem_drop);
-            if ptr_drop.is_null() {
-                let _ = CloseClipboard();
-                return Err("GlobalLock HDROP failed".to_string());
+            let dropfiles_offset = u32::try_from(dropfiles_size)
+                .map_err(|_| "DROPFILES header is too large".to_string())?;
+            data[0..4].copy_from_slice(&dropfiles_offset.to_le_bytes());
+            data[16..20].copy_from_slice(&1i32.to_le_bytes());
+            for (destination, unit) in data[dropfiles_size..]
+                .chunks_exact_mut(2)
+                .zip(wide_path.iter())
+            {
+                destination.copy_from_slice(&unit.to_le_bytes());
             }
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr_drop as *mut u8, data_size);
-            let _ = GlobalUnlock(hmem_drop);
-            if SetClipboardData(CF_HDROP, HANDLE(hmem_drop.0)).is_err() {
-                let _ = CloseClipboard();
-                return Err("SetClipboardData HDROP failed".to_string());
-            }
+            set_clipboard_bytes(CF_HDROP, &data, "HDROP")?;
         }
-
-        let _ = CloseClipboard();
     }
 
     Ok(())
@@ -627,69 +709,49 @@ fn write_image_to_clipboard(rgba: &[u8], w: u32, h: u32, png_bytes: &[u8]) -> Re
 
 #[cfg(target_os = "windows")]
 fn write_files_to_clipboard(paths: &[String]) -> Result<(), String> {
-    use windows::Win32::Foundation::{HANDLE, HWND};
-    use windows::Win32::System::DataExchange::*;
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::DataExchange::EmptyClipboard;
     use windows::Win32::UI::Shell::DROPFILES;
 
     const CF_HDROP: u32 = 15;
+
+    if paths.is_empty() {
+        return Err("No files were provided for the clipboard".to_string());
+    }
 
     let wide_paths: Vec<Vec<u16>> = paths
         .iter()
         .map(|p| p.encode_utf16().chain(std::iter::once(0u16)).collect())
         .collect();
-    let total_wide_len: usize = wide_paths.iter().map(|p| p.len()).sum();
+    let total_wide_len = wide_paths
+        .iter()
+        .try_fold(1usize, |total, path| total.checked_add(path.len()))
+        .ok_or_else(|| "File path clipboard data is too large".to_string())?;
 
     let dropfiles_size = std::mem::size_of::<DROPFILES>();
-    let data_size = dropfiles_size + (total_wide_len + 1) * std::mem::size_of::<u16>();
+    let path_bytes = total_wide_len
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or_else(|| "File path clipboard byte length overflow".to_string())?;
+    let data_size = dropfiles_size
+        .checked_add(path_bytes)
+        .ok_or_else(|| "HDROP allocation size overflow".to_string())?;
 
     let mut data: Vec<u8> = vec![0u8; data_size];
+    let dropfiles_offset =
+        u32::try_from(dropfiles_size).map_err(|_| "DROPFILES header is too large".to_string())?;
+    data[0..4].copy_from_slice(&dropfiles_offset.to_le_bytes());
+    data[16..20].copy_from_slice(&1i32.to_le_bytes());
 
-    let df = data.as_mut_ptr() as *mut DROPFILES;
-    unsafe {
-        (*df).pFiles = dropfiles_size as u32;
-        (*df).pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-        (*df).fNC = windows::Win32::Foundation::BOOL(0);
-        (*df).fWide = windows::Win32::Foundation::BOOL(1);
+    let mut position = dropfiles_size;
+    for path in &wide_paths {
+        for unit in path {
+            data[position..position + 2].copy_from_slice(&unit.to_le_bytes());
+            position += 2;
+        }
     }
 
-    let offset = dropfiles_size;
-    let mut pos = offset;
-    for wp in &wide_paths {
-        let byte_len = wp.len() * std::mem::size_of::<u16>();
-        data[pos..pos + byte_len].copy_from_slice(unsafe {
-            std::slice::from_raw_parts(wp.as_ptr() as *const u8, byte_len)
-        });
-        pos += byte_len;
-    }
-
-    unsafe {
-        if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
-            return Err("OpenClipboard failed".to_string());
-        }
-        let _ = EmptyClipboard();
-
-        let hmem = GlobalAlloc(GMEM_MOVEABLE, data_size).map_err(|e| {
-            let _ = CloseClipboard();
-            format!("GlobalAlloc failed: {}", e)
-        })?;
-
-        let ptr = GlobalLock(hmem);
-        if ptr.is_null() {
-            let _ = CloseClipboard();
-            return Err("GlobalLock failed".to_string());
-        }
-
-        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data_size);
-        let _ = GlobalUnlock(hmem);
-
-        if SetClipboardData(CF_HDROP, HANDLE(hmem.0)).is_err() {
-            let _ = CloseClipboard();
-            return Err("SetClipboardData failed".to_string());
-        }
-
-        let _ = CloseClipboard();
-    }
+    let _clipboard = WindowsClipboardSession::open()?;
+    unsafe { EmptyClipboard() }.map_err(|error| format!("EmptyClipboard failed: {error}"))?;
+    set_clipboard_bytes(CF_HDROP, &data, "HDROP")?;
 
     Ok(())
 }

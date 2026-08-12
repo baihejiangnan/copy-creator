@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "copy-creator"
-version = "0.2.22"
+version = "0.2.24"
 dependencies = [
  "base64 0.22.1",
  "chrono",

@@ -56,9 +56,28 @@ fn classify_text_record(text: &str) -> &'static str {
     }
 }
 
+fn is_tabular_clipboard_text(text: &str) -> bool {
+    text.contains('\t') && text.chars().any(|character| !character.is_whitespace())
+}
+
+fn normalize_clipboard_text(text: &str, preserve_table_layout: bool) -> String {
+    if preserve_table_layout || is_tabular_clipboard_text(text) {
+        text.trim_end_matches(['\r', '\n']).to_string()
+    } else {
+        text.trim().to_string()
+    }
+}
+
+fn should_prefer_text_over_image(text: &str, has_spreadsheet_format: bool) -> bool {
+    !text.is_empty() && (has_spreadsheet_format || is_tabular_clipboard_text(text))
+}
+
 #[cfg(test)]
 mod url_tests {
-    use super::{classify_text_record, is_explorer_address, is_url};
+    use super::{
+        classify_text_record, is_explorer_address, is_tabular_clipboard_text, is_url,
+        normalize_clipboard_text, should_prefer_text_over_image,
+    };
 
     #[test]
     fn accepts_links_with_default_handlers() {
@@ -124,6 +143,327 @@ mod url_tests {
         assert_eq!(classify_text_record("https://example.com"), "link");
         assert_eq!(classify_text_record(r"C:\Users\Public"), "explorer");
         assert_eq!(classify_text_record("plain text"), "text");
+    }
+
+    #[test]
+    fn recognizes_tabular_clipboard_text() {
+        assert!(is_tabular_clipboard_text("Name\tScore\r\nAlice\t10\r\n"));
+        assert!(should_prefer_text_over_image(
+            "Name\tScore\r\nAlice\t10\r\n",
+            false
+        ));
+        assert!(should_prefer_text_over_image("single cell", true));
+        assert!(!should_prefer_text_over_image("plain text", false));
+        assert!(!should_prefer_text_over_image("", true));
+    }
+
+    #[test]
+    fn preserves_table_cell_boundaries_when_normalizing() {
+        assert_eq!(
+            normalize_clipboard_text("\tHeader\t\r\nValue\t\t\r\n", true),
+            "\tHeader\t\r\nValue\t\t"
+        );
+        assert_eq!(
+            normalize_clipboard_text("  ordinary text  ", false),
+            "ordinary text"
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+const MAX_CLIPBOARD_FORMAT_BYTES: usize = 512 * 1024 * 1024;
+#[cfg(target_os = "windows")]
+const MAX_CLIPBOARD_RGBA_BYTES: usize = 256 * 1024 * 1024;
+#[cfg(target_os = "windows")]
+const MAX_CLIPBOARD_IMAGE_DIMENSION: u32 = 20_000;
+
+#[cfg(target_os = "windows")]
+struct ClipboardSession;
+
+#[cfg(target_os = "windows")]
+impl ClipboardSession {
+    fn open() -> Option<Self> {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::DataExchange::OpenClipboard;
+
+        unsafe { OpenClipboard(HWND::default()).ok()? };
+        Some(Self)
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ClipboardSession {
+    fn drop(&mut self) {
+        use windows::Win32::System::DataExchange::CloseClipboard;
+
+        let _ = unsafe { CloseClipboard() };
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct LockedGlobalMemory {
+    handle: windows::Win32::Foundation::HGLOBAL,
+    pointer: *const u8,
+    len: usize,
+}
+
+#[cfg(target_os = "windows")]
+impl LockedGlobalMemory {
+    fn lock(handle: windows::Win32::Foundation::HANDLE) -> Option<Self> {
+        use windows::Win32::Foundation::HGLOBAL;
+        use windows::Win32::System::Memory::{GlobalLock, GlobalSize};
+
+        let handle = HGLOBAL(handle.0);
+        let len = unsafe { GlobalSize(handle) };
+        if len == 0 || len > MAX_CLIPBOARD_FORMAT_BYTES {
+            return None;
+        }
+
+        let pointer = unsafe { GlobalLock(handle) } as *const u8;
+        if pointer.is_null() {
+            return None;
+        }
+
+        Some(Self {
+            handle,
+            pointer,
+            len,
+        })
+    }
+
+    fn bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.pointer, self.len) }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for LockedGlobalMemory {
+    fn drop(&mut self) {
+        use windows::Win32::System::Memory::GlobalUnlock;
+
+        let _ = unsafe { GlobalUnlock(self.handle) };
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn read_i32_le(bytes: &[u8], offset: usize) -> Option<i32> {
+    Some(i32::from_le_bytes(
+        bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn checked_rgba_len(width: u32, height: u32) -> Option<usize> {
+    if width == 0
+        || height == 0
+        || width >= MAX_CLIPBOARD_IMAGE_DIMENSION
+        || height >= MAX_CLIPBOARD_IMAGE_DIMENSION
+    {
+        return None;
+    }
+
+    let len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    (len <= MAX_CLIPBOARD_RGBA_BYTES).then_some(len)
+}
+
+#[cfg(target_os = "windows")]
+fn copy_clipboard_format(format: u32) -> Option<Vec<u8>> {
+    use windows::Win32::System::DataExchange::{GetClipboardData, IsClipboardFormatAvailable};
+
+    let _clipboard = ClipboardSession::open()?;
+    unsafe { IsClipboardFormatAvailable(format).ok()? };
+    let handle = unsafe { GetClipboardData(format).ok()? };
+    let memory = LockedGlobalMemory::lock(handle)?;
+    Some(memory.bytes().to_vec())
+}
+
+#[cfg(target_os = "windows")]
+fn decode_clipboard_png(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+    if bytes.get(..PNG_SIGNATURE.len())? != PNG_SIGNATURE {
+        return None;
+    }
+
+    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    let expected_len = checked_rgba_len(width, height)?;
+    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()?;
+    if image.width() != width || image.height() != height {
+        return None;
+    }
+
+    let rgba = image.into_rgba8().into_raw();
+    (rgba.len() == expected_len).then_some((rgba, width, height))
+}
+
+#[cfg(target_os = "windows")]
+fn decode_clipboard_dib(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    const BI_RGB: u32 = 0;
+    const BI_BITFIELDS: u32 = 3;
+    const BI_ALPHABITFIELDS: u32 = 6;
+
+    let header_size = read_u32_le(bytes, 0)? as usize;
+    if !matches!(header_size, 40 | 52 | 56 | 108 | 124) || header_size > bytes.len() {
+        return None;
+    }
+
+    let signed_width = read_i32_le(bytes, 4)?;
+    let signed_height = read_i32_le(bytes, 8)?;
+    if signed_width <= 0 || signed_height == 0 {
+        return None;
+    }
+    let width = u32::try_from(signed_width).ok()?;
+    let height = signed_height
+        .checked_abs()
+        .and_then(|value| u32::try_from(value).ok())?;
+    let expected_len = checked_rgba_len(width, height)?;
+
+    let planes = read_u16_le(bytes, 12)?;
+    let bits_per_pixel = read_u16_le(bytes, 14)?;
+    let compression = read_u32_le(bytes, 16)?;
+    if planes != 1
+        || !matches!(bits_per_pixel, 1 | 4 | 8 | 16 | 24 | 32)
+        || !matches!(compression, BI_RGB | BI_BITFIELDS | BI_ALPHABITFIELDS)
+        || (matches!(compression, BI_BITFIELDS | BI_ALPHABITFIELDS)
+            && !matches!(bits_per_pixel, 16 | 32))
+    {
+        return None;
+    }
+
+    let mask_bytes = if header_size == 40 {
+        match compression {
+            BI_BITFIELDS => 3usize.checked_mul(4)?,
+            BI_ALPHABITFIELDS => 4usize.checked_mul(4)?,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    let used_colors = read_u32_le(bytes, 32)? as usize;
+    let default_colors = if bits_per_pixel <= 8 {
+        1usize.checked_shl(bits_per_pixel as u32)?
+    } else {
+        0
+    };
+    let palette_entries = if used_colors == 0 {
+        default_colors
+    } else {
+        used_colors
+    };
+    if default_colors != 0 && palette_entries > default_colors {
+        return None;
+    }
+    let palette_bytes = palette_entries.checked_mul(4)?;
+    let pixel_offset = header_size
+        .checked_add(mask_bytes)?
+        .checked_add(palette_bytes)?;
+
+    let row_bits = (width as usize).checked_mul(bits_per_pixel as usize)?;
+    let row_stride = row_bits.checked_add(31)?.checked_div(32)?.checked_mul(4)?;
+    let pixel_bytes = row_stride.checked_mul(height as usize)?;
+    let pixel_end = pixel_offset.checked_add(pixel_bytes)?;
+    if pixel_offset > bytes.len() || pixel_end > bytes.len() {
+        return None;
+    }
+
+    let file_size = 14usize.checked_add(bytes.len())?;
+    let file_size_u32 = u32::try_from(file_size).ok()?;
+    let pixel_offset_u32 = u32::try_from(14usize.checked_add(pixel_offset)?).ok()?;
+    let mut bmp = Vec::with_capacity(file_size);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size_u32.to_le_bytes());
+    bmp.extend_from_slice(&0u32.to_le_bytes());
+    bmp.extend_from_slice(&pixel_offset_u32.to_le_bytes());
+    bmp.extend_from_slice(bytes);
+
+    let image = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?;
+    if image.width() != width || image.height() != height {
+        return None;
+    }
+    let rgba = image.into_rgba8().into_raw();
+    (rgba.len() == expected_len).then_some((rgba, width, height))
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod dib_tests {
+    use super::decode_clipboard_dib;
+
+    fn make_24_bit_dib(width: i32, height: i32, pixels: &[u8]) -> Vec<u8> {
+        let mut dib = vec![0u8; 40];
+        dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&width.to_le_bytes());
+        dib[8..12].copy_from_slice(&height.to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&24u16.to_le_bytes());
+        dib[20..24].copy_from_slice(&(pixels.len() as u32).to_le_bytes());
+        dib.extend_from_slice(pixels);
+        dib
+    }
+
+    #[test]
+    fn decodes_bottom_up_dib_with_row_padding() {
+        let pixels = [
+            255, 0, 0, 255, 255, 255, 0, 0, // bottom: blue, white + padding
+            0, 0, 255, 0, 255, 0, 0, 0, // top: red, green + padding
+        ];
+        let (rgba, width, height) =
+            decode_clipboard_dib(&make_24_bit_dib(2, 2, &pixels)).expect("valid DIB should decode");
+
+        assert_eq!((width, height), (2, 2));
+        assert_eq!(&rgba[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&rgba[4..8], &[0, 255, 0, 255]);
+        assert_eq!(&rgba[8..12], &[0, 0, 255, 255]);
+        assert_eq!(&rgba[12..16], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn decodes_top_down_32_bit_dib() {
+        let mut dib = vec![0u8; 40];
+        dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&2i32.to_le_bytes());
+        dib[8..12].copy_from_slice(&(-1i32).to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+        dib[20..24].copy_from_slice(&8u32.to_le_bytes());
+        dib.extend_from_slice(&[30, 20, 10, 255, 70, 60, 50, 128]);
+
+        let (rgba, width, height) =
+            decode_clipboard_dib(&dib).expect("valid top-down DIB should decode");
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(&rgba, &[10, 20, 30, 255, 50, 60, 70, 255]);
+    }
+
+    #[test]
+    fn rejects_truncated_or_invalid_dib_layouts() {
+        let pixels = [0u8; 16];
+        let valid = make_24_bit_dib(2, 2, &pixels);
+
+        assert!(decode_clipboard_dib(&valid[..valid.len() - 1]).is_none());
+
+        let mut oversized_header = valid.clone();
+        oversized_header[0..4].copy_from_slice(&124u32.to_le_bytes());
+        assert!(decode_clipboard_dib(&oversized_header).is_none());
+
+        let mut invalid_height = valid;
+        invalid_height[8..12].copy_from_slice(&i32::MIN.to_le_bytes());
+        assert!(decode_clipboard_dib(&invalid_height).is_none());
     }
 }
 
@@ -335,205 +675,158 @@ fn import_image_file(app: &AppHandle, file_path: &str) -> bool {
     true
 }
 
+#[cfg(target_os = "windows")]
+fn clipboard_has_spreadsheet_format() -> bool {
+    use windows::Win32::System::DataExchange::{
+        IsClipboardFormatAvailable, RegisterClipboardFormatW,
+    };
+
+    const SPREADSHEET_FORMATS: [&str; 9] = [
+        "Biff12",
+        "Biff8",
+        "Biff5",
+        "Biff4",
+        "Biff3",
+        "Biff",
+        "XML Spreadsheet",
+        "DataInterchangeFormat",
+        "Csv",
+    ];
+
+    let Some(_clipboard) = ClipboardSession::open() else {
+        return false;
+    };
+    unsafe {
+        SPREADSHEET_FORMATS.iter().any(|name| {
+            let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            let format = RegisterClipboardFormatW(windows::core::PCWSTR(wide_name.as_ptr()));
+            format != 0 && IsClipboardFormatAvailable(format).is_ok()
+        })
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clipboard_has_spreadsheet_format() -> bool {
+    false
+}
+
+fn read_clipboard_text_candidate(handle: &AppHandle) -> Option<(String, bool)> {
+    let raw_text = handle.clipboard().read_text().ok()?;
+    let has_spreadsheet_format = clipboard_has_spreadsheet_format();
+    let text = normalize_clipboard_text(&raw_text, has_spreadsheet_format);
+    (!text.is_empty()).then_some((text, has_spreadsheet_format))
+}
+
 /// Lightweight: hash the raw clipboard image bytes (PNG or DIB) for stable dedup.
 /// Raw clipboard bytes are deterministic across reads, unlike re-decoded RGBA.
 #[cfg(target_os = "windows")]
 fn get_clipboard_image_hash() -> u64 {
-    use windows::Win32::Foundation::{HGLOBAL, HWND};
-    use windows::Win32::System::DataExchange::*;
-    use windows::Win32::System::Memory::*;
+    use windows::Win32::System::DataExchange::{
+        GetClipboardData, IsClipboardFormatAvailable, RegisterClipboardFormatW,
+    };
 
-    unsafe {
-        if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
-            return 0;
+    const CF_DIB: u32 = 8;
+    const CF_DIBV5: u32 = 17;
+
+    let png_format_name: Vec<u16> = "PNG\0".encode_utf16().collect();
+    let cf_png =
+        unsafe { RegisterClipboardFormatW(windows::core::PCWSTR(png_format_name.as_ptr())) };
+    let Some(_clipboard) = ClipboardSession::open() else {
+        return 0;
+    };
+
+    for format in [cf_png, CF_DIBV5, CF_DIB] {
+        if format == 0 || unsafe { IsClipboardFormatAvailable(format) }.is_err() {
+            continue;
         }
+        let Ok(handle) = (unsafe { GetClipboardData(format) }) else {
+            continue;
+        };
+        let Some(memory) = LockedGlobalMemory::lock(handle) else {
+            continue;
+        };
 
-        let mut result = 0u64;
-
-        // Hash PNG format if available (most stable)
-        let png_format_name: Vec<u16> = "PNG\0".encode_utf16().collect();
-        let cf_png = RegisterClipboardFormatW(windows::core::PCWSTR(png_format_name.as_ptr()));
-        if cf_png != 0 && IsClipboardFormatAvailable(cf_png).is_ok() {
-            if let Ok(handle) = GetClipboardData(cf_png) {
-                let hglobal = HGLOBAL(handle.0);
-                let size = GlobalSize(hglobal);
-                if size > 0 {
-                    let ptr = GlobalLock(hglobal);
-                    if !ptr.is_null() {
-                        let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
-                        result = bytes
-                            .iter()
-                            .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64));
-                        let _ = GlobalUnlock(hglobal);
-                        let _ = CloseClipboard();
-                        return result;
-                    }
-                    let _ = GlobalUnlock(hglobal);
-                }
-            }
-        }
-
-        // Fallback: hash DIB header + first 256 pixels for stable fingerprint
-        const CF_DIB_VAL: u32 = 8;
-        if IsClipboardFormatAvailable(CF_DIB_VAL).is_ok() {
-            if let Ok(handle) = GetClipboardData(CF_DIB_VAL) {
-                let hglobal = HGLOBAL(handle.0);
-                let size = GlobalSize(hglobal);
-                if size >= 40 {
-                    let ptr = GlobalLock(hglobal);
-                    if !ptr.is_null() {
-                        let src = ptr as *const u8;
-                        // Hash DIB header (40 bytes) + first 1024 bytes of pixel data
-                        let hash_len = (40 + 1024).min(size);
-                        let bytes = std::slice::from_raw_parts(src, hash_len);
-                        result = bytes
-                            .iter()
-                            .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64));
-                    }
-                    let _ = GlobalUnlock(hglobal);
-                }
-            }
-        }
-
-        let _ = CloseClipboard();
-        result
+        let hash = memory
+            .bytes()
+            .iter()
+            .fold(0xcbf29ce484222325u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            });
+        return if hash == 0 { 1 } else { hash };
     }
+
+    0
 }
 
 /// Direct Windows clipboard image read as a supplement to the clipboard plugin.
 /// Returns decoded RGBA data + dimensions (only called when image hash changed).
 #[cfg(target_os = "windows")]
 fn read_clipboard_image_raw() -> Option<(Vec<u8>, u32, u32)> {
-    use windows::Win32::Foundation::{HGLOBAL, HWND};
-    use windows::Win32::System::DataExchange::*;
-    use windows::Win32::System::Memory::*;
+    use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 
-    const CF_DIB_VAL: u32 = 8;
-    const CF_DIBV5_VAL: u32 = 17;
+    const CF_DIB: u32 = 8;
+    const CF_DIBV5: u32 = 17;
 
-    unsafe {
-        if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
-            return None;
+    let png_format_name: Vec<u16> = "PNG\0".encode_utf16().collect();
+    let cf_png =
+        unsafe { RegisterClipboardFormatW(windows::core::PCWSTR(png_format_name.as_ptr())) };
+    if cf_png != 0 {
+        if let Some(image) = copy_clipboard_format(cf_png)
+            .as_deref()
+            .and_then(decode_clipboard_png)
+        {
+            return Some(image);
         }
-
-        // Try PNG format first (lossless, preserves alpha)
-        let png_format_name: Vec<u16> = "PNG\0".encode_utf16().collect();
-        let cf_png = RegisterClipboardFormatW(windows::core::PCWSTR(png_format_name.as_ptr()));
-        if cf_png != 0 && IsClipboardFormatAvailable(cf_png).is_ok() {
-            if let Ok(handle) = GetClipboardData(cf_png) {
-                let hglobal = HGLOBAL(handle.0);
-                let size = GlobalSize(hglobal);
-                if size > 0 {
-                    let ptr = GlobalLock(hglobal);
-                    if !ptr.is_null() {
-                        let bytes = std::slice::from_raw_parts(ptr as *const u8, size).to_vec();
-                        let _ = GlobalUnlock(hglobal);
-                        let _ = CloseClipboard();
-                        if let Ok(img) = image::load_from_memory(&bytes) {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = (img.width(), img.height());
-                            return Some((rgba.to_vec(), w, h));
-                        }
-                    }
-                    let _ = GlobalUnlock(hglobal);
-                }
-            }
-        }
-
-        // Try CF_DIBV5 first, then CF_DIB
-        for format in [CF_DIBV5_VAL, CF_DIB_VAL] {
-            if IsClipboardFormatAvailable(format).is_err() {
-                continue;
-            }
-            if let Ok(handle) = GetClipboardData(format) {
-                let hglobal = HGLOBAL(handle.0);
-                let size = GlobalSize(hglobal);
-                if size >= 40 {
-                    let ptr = GlobalLock(hglobal);
-                    if !ptr.is_null() {
-                        let header = ptr as *const u32;
-                        let bi_size = *header;
-                        let bpp = *((ptr as *const u8).add(14)) as u16;
-                        let compression = *header.add(4);
-                        let w = *header.add(1) as i32;
-                        let h = (*header.add(2) as i32).abs();
-                        if w > 0 && h > 0 && w < 20000 && h < 20000 {
-                            let rgba = if bpp == 32 && compression == 0 {
-                                let pixel_count = (w * h) as usize;
-                                let src = (ptr as *const u8).add(bi_size as usize);
-                                let mut rgba = vec![0u8; pixel_count * 4];
-                                for i in 0..pixel_count {
-                                    rgba[i * 4] = *src.add(i * 4 + 2);
-                                    rgba[i * 4 + 1] = *src.add(i * 4 + 1);
-                                    rgba[i * 4 + 2] = *src.add(i * 4);
-                                    rgba[i * 4 + 3] = *src.add(i * 4 + 3);
-                                }
-                                rgba
-                            } else {
-                                let full =
-                                    std::slice::from_raw_parts(ptr as *const u8, size).to_vec();
-                                let _ = GlobalUnlock(hglobal);
-                                let _ = CloseClipboard();
-                                let pixel_offset = bi_size;
-                                let file_size = 14 + size as u32;
-                                let mut bmp: Vec<u8> = Vec::with_capacity(file_size as usize);
-                                bmp.extend_from_slice(b"BM");
-                                bmp.extend_from_slice(&file_size.to_le_bytes());
-                                bmp.extend_from_slice(&0u32.to_le_bytes());
-                                bmp.extend_from_slice(&(14u32 + pixel_offset).to_le_bytes());
-                                bmp.extend_from_slice(&full);
-                                if let Ok(img) = image::load_from_memory(&bmp) {
-                                    let rgba = img.to_rgba8();
-                                    return Some((rgba.to_vec(), img.width(), img.height()));
-                                }
-                                return None;
-                            };
-                            let _ = GlobalUnlock(hglobal);
-                            let _ = CloseClipboard();
-                            return Some((rgba, w as u32, h as u32));
-                        }
-                        let _ = GlobalUnlock(hglobal);
-                    }
-                }
-            }
-        }
-
-        let _ = CloseClipboard();
     }
+
+    for format in [CF_DIBV5, CF_DIB] {
+        if let Some(image) = copy_clipboard_format(format)
+            .as_deref()
+            .and_then(decode_clipboard_dib)
+        {
+            return Some(image);
+        }
+    }
+
     None
 }
 
 #[cfg(target_os = "windows")]
+fn read_clipboard_image_candidate(handle: &AppHandle) -> Option<(Vec<u8>, u32, u32)> {
+    if let Some(image) = read_clipboard_image_raw() {
+        return Some(image);
+    }
+
+    let image = handle.clipboard().read_image().ok()?;
+    let width = image.width();
+    let height = image.height();
+    let expected_len = checked_rgba_len(width, height)?;
+    let rgba = image.rgba();
+    (rgba.len() == expected_len).then(|| (rgba.to_vec(), width, height))
+}
+
+#[cfg(target_os = "windows")]
 fn read_clipboard_files() -> Option<Vec<String>> {
-    use windows::Win32::Foundation::HWND;
     use windows::Win32::System::DataExchange::*;
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
     const CF_HDROP: u32 = 15;
 
+    let _clipboard = ClipboardSession::open()?;
     unsafe {
-        if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
-            return None;
-        }
-
         if IsClipboardFormatAvailable(CF_HDROP).is_err() {
-            let _ = CloseClipboard();
             return None;
         }
 
         let handle = match GetClipboardData(CF_HDROP) {
             Ok(h) => h,
-            Err(_) => {
-                let _ = CloseClipboard();
-                return None;
-            }
+            Err(_) => return None,
         };
 
         let hdrop = HDROP(handle.0);
 
         let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
         if count == 0 {
-            let _ = CloseClipboard();
             return None;
         }
 
@@ -551,8 +844,6 @@ fn read_clipboard_files() -> Option<Vec<String>> {
                 paths.push(path);
             }
         }
-
-        let _ = CloseClipboard();
 
         if paths.is_empty() {
             None
@@ -746,10 +1037,8 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
     crate::tray::schedule_tray_refresh(app);
 }
 
-pub fn sync_monitor_cache(handle: &AppHandle) {
-    if let Ok(text) = handle.clipboard().read_text() {
-        *LAST_CLIPBOARD_TEXT.lock().unwrap() = text.trim().to_string();
-    }
+fn sync_monitor_cache_from_snapshot(text: Option<&str>) {
+    *LAST_CLIPBOARD_TEXT.lock().unwrap() = text.unwrap_or_default().to_string();
     #[cfg(target_os = "windows")]
     {
         let h = get_clipboard_image_hash();
@@ -763,14 +1052,17 @@ pub fn sync_monitor_cache(handle: &AppHandle) {
     }
 }
 
+pub fn sync_monitor_cache(handle: &AppHandle) {
+    let text = read_clipboard_text_candidate(handle).map(|(text, _)| text);
+    sync_monitor_cache_from_snapshot(text.as_deref());
+}
+
 pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.clone();
 
     {
-        let initial_text = handle
-            .clipboard()
-            .read_text()
-            .map(|s| s.trim().to_string())
+        let initial_text = read_clipboard_text_candidate(&handle)
+            .map(|(text, _)| text)
             .unwrap_or_default();
         *LAST_CLIPBOARD_TEXT.lock().unwrap() = initial_text;
     }
@@ -830,6 +1122,17 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 continue;
             }
 
+            let text_candidate = read_clipboard_text_candidate(&handle);
+            if let Some((text, has_spreadsheet_format)) = text_candidate.as_ref() {
+                if should_prefer_text_over_image(text, *has_spreadsheet_format) {
+                    *LAST_CLIPBOARD_TEXT.lock().unwrap() = text.clone();
+                    let record_type = classify_text_record(text);
+                    insert_and_emit(&handle, record_type, text);
+                    sync_monitor_cache_from_snapshot(Some(text));
+                    continue;
+                }
+            }
+
             let mut image_recorded = false;
 
             let mut image_data: Option<(Vec<u8>, u32, u32)> = None;
@@ -844,7 +1147,7 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 if raw_hash != 0 && raw_hash != *cached_hash {
                     *cached_hash = raw_hash;
                     drop(cached_hash);
-                    if let Some((rgba, w, h)) = read_clipboard_image_raw() {
+                    if let Some((rgba, w, h)) = read_clipboard_image_candidate(&handle) {
                         image_data = Some((rgba, w, h));
                     }
                 } else if raw_hash != 0 {
@@ -907,7 +1210,8 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             if image_is_same {
                 #[cfg(target_os = "windows")]
                 {
-                    if let Some((rgba_vec, img_w, img_h)) = read_clipboard_image_raw() {
+                    if let Some((rgba_vec, img_w, img_h)) = read_clipboard_image_candidate(&handle)
+                    {
                         let source_bytes = rgba_vec.len() as u64;
                         if let Some(buffer) = image::RgbaImage::from_raw(img_w, img_h, rgba_vec) {
                             if let Some(stored) = process_and_store_image(
@@ -926,14 +1230,19 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                             }
                         }
                     } else {
-                        log::warn!("clipboard: image_is_same but read_clipboard_image_raw failed, record lost");
+                        log::warn!(
+                            "clipboard: image_is_same but clipboard image read failed, record lost"
+                        );
                     }
                 }
-                sync_monitor_cache(&handle);
+                sync_monitor_cache_from_snapshot(
+                    text_candidate.as_ref().map(|(text, _)| text.as_str()),
+                );
             } else if image_recorded {
-                if let Ok(text) = handle.clipboard().read_text() {
-                    *LAST_CLIPBOARD_TEXT.lock().unwrap() = text.trim().to_string();
-                }
+                *LAST_CLIPBOARD_TEXT.lock().unwrap() = text_candidate
+                    .as_ref()
+                    .map(|(text, _)| text.clone())
+                    .unwrap_or_default();
                 #[cfg(target_os = "windows")]
                 {
                     if let Some(files) = read_clipboard_files() {
@@ -941,13 +1250,12 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                     }
                 }
             } else {
-                if let Ok(text) = handle.clipboard().read_text() {
-                    let text = text.trim().to_string();
-                    if !text.is_empty() && text != *LAST_CLIPBOARD_TEXT.lock().unwrap() {
+                if let Some((text, _)) = text_candidate {
+                    if text != *LAST_CLIPBOARD_TEXT.lock().unwrap() {
                         *LAST_CLIPBOARD_TEXT.lock().unwrap() = text.clone();
                         let record_type = classify_text_record(&text);
                         insert_and_emit(&handle, record_type, &text);
-                    } else if !text.is_empty() {
+                    } else {
                         // Same text re-copied (sequence changed, text matches cache)
                         let record_type = classify_text_record(&text);
                         insert_and_emit(&handle, record_type, &text);
