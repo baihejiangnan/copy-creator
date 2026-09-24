@@ -27,12 +27,23 @@ Clipboard Manager · Quick Phrases · Translation
 
 Copy Creator is a lightweight Windows desktop productivity tool that appears as a floating window and minimizes to the system tray when closed. It integrates three core features: clipboard history management, quick phrases, and translation, helping users improve text processing efficiency in their daily work.
 
+## Screenshots
+
+**Clipboard deduplication and cleanup settings**
+
+![Clipboard settings showing the duplicate window, manual cleanup, and date-based bulk deletion](./docs/screenshots/clipboard-settings.png)
+
+**Translation example**
+
+![Translation window showing sample English text and its Chinese translation](./docs/screenshots/translation.png)
+
 ## Features
 
 ### 📋 Clipboard Manager
 - Automatically records text and image copy history
 - Keyword search for quick access to historical content
 - One-click paste to the current cursor position
+- Configurable duplicate window (15 minutes by default), manual deduplication, and date-based bulk deletion with a count preview
 - Configurable retention period with automatic cleanup
 
 ### ⚡ Quick Phrases
@@ -44,6 +55,11 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 - **AI Translation**: Compatible with OpenAI API format, customizable endpoint and model
 - **Built-in Translation**: Free translation service, ready to use out of the box
 - Local caching of translation results to avoid redundant requests
+
+### 🔒 Local API Key Protection
+
+- Translation and recognized or manually marked clipboard API keys are encrypted with Windows DPAPI for the current user.
+- Keys remain available for full-value paste. The settings view does not reveal saved translation keys, and new JSON exports omit protected keys.
 
 ### ⚙️ System Features
 - Global hotkey to show/hide window
@@ -65,12 +81,11 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 
 ## Download
 
-Go to the [Releases](https://github.com/hu-qi-jia/copy-creator/releases) page to download the latest installer:
+Download the latest portable build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.24-baihejiangnan.1):
 
-| Package | Description |
+| File | Description |
 |:---|:---|
-| `Copy Creator_x64-setup.exe` | NSIS Installer |
-| `Copy Creator_x64_zh-CN.msi` | MSI Installer (Chinese) |
+| [Copy-Creator-0.2.24-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.24-baihejiangnan.1/Copy-Creator-0.2.24-portable.exe) | Portable Windows executable; run without installation |
 
 **System Requirements**: Windows 11
 
@@ -78,8 +93,8 @@ Go to the [Releases](https://github.com/hu-qi-jia/copy-creator/releases) page to
 
 ### Getting Started
 
-1. **Launch the App**: Double-click the desktop icon after installation, the app will appear as a floating window
-2. **System Tray**: When you close the window, the app automatically minimizes to the system tray and continues running in the background
+1. **Launch the App**: Double-click the portable EXE; the app appears as a floating window
+2. **System Tray**: Closing the window hides it while the app continues running from the tray
 3. **Show Window**: Use the global hotkey (configurable in settings) to quickly show/hide the window
 
 ### Clipboard Feature
@@ -110,6 +125,7 @@ Go to the [Releases](https://github.com/hu-qi-jia/copy-creator/releases) page to
 - **Theme**: Switch between light and dark themes
 - **Launch at Startup**: Enable or disable auto-start on boot
 - **Storage Management**: Configure clipboard history retention period
+- **History Cleanup**: Set the duplicate window, remove duplicates manually, or bulk delete by date
 
 ## Development Guide
 
@@ -124,7 +140,7 @@ Go to the [Releases](https://github.com/hu-qi-jia/copy-creator/releases) page to
 
 ```bash
 # Clone the repository
-git clone https://github.com/hu-qi-jia/copy-creator.git
+git clone https://github.com/baihejiangnan/copy-creator.git
 cd copy-creator/copy-creator
 
 # Install dependencies

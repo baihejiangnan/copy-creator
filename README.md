@@ -27,6 +27,16 @@
 
 Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形式呈现，关闭后自动驻留系统托盘。它集成了剪切板历史管理、快捷短语和翻译三大核心功能，帮助用户在日常工作中提升文本处理效率。
 
+## 界面截图
+
+**剪贴板去重与批量清理设置**
+
+![剪贴板设置界面，包含重复内容合并时间、主动去重和按日期批量删除](./docs/screenshots/clipboard-settings.png)
+
+**翻译示例**
+
+![翻译界面，展示英文示例文本及中文翻译结果](./docs/screenshots/translation.png)
+
 ## 主要功能
 
 ### 📋 剪切板管理
@@ -34,6 +44,7 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 - 支持关键词搜索，快速定位历史内容
 - 一键粘贴到当前光标位置
 - 相同类型和内容在可设置的时间内重复复制时，更新已有记录到列表顶部（默认 15 分钟，可选 1 秒等时长）
+- 可主动清理历史重复记录，或按两个月、一个月、7 天、3 天及今天前的日期批量删除；执行前可查看数量并确认
 - 可设置保留时长，自动清理过期记录
 
 ### ⚡ 快捷短语
@@ -72,12 +83,11 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 
 ## 下载安装
 
-前往 [Releases](https://github.com/hu-qi-jia/copy-creator/releases) 页面下载最新安装包：
+前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.24-baihejiangnan.1) 下载最新便携版：
 
-| 安装包 | 说明 |
+| 文件 | 说明 |
 |:---|:---|
-| `Copy Creator_x64-setup.exe` | NSIS 安装包 |
-| `Copy Creator_x64_zh-CN.msi` | MSI 安装包（中文） |
+| [Copy-Creator-0.2.24-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.24-baihejiangnan.1/Copy-Creator-0.2.24-portable.exe) | Windows 便携版，下载后直接运行，无需安装 |
 
 **系统要求**：Windows 11
 
@@ -85,8 +95,8 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 
 ### 基本使用
 
-1. **启动应用**：安装后双击桌面图标启动，应用将以悬浮窗形式显示
-2. **驻留托盘**：关闭窗口后，应用会自动最小化到系统托盘，继续在后台运行
+1. **启动应用**：双击便携版 EXE，应用将以悬浮窗形式显示
+2. **驻留托盘**：关闭窗口后，应用会隐藏并继续在系统托盘运行
 3. **唤起窗口**：使用全局快捷键（默认可在设置中查看）快速唤起/隐藏窗口
 
 ### 剪切板功能
@@ -117,6 +127,7 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 - **主题**：切换亮色/暗色主题
 - **开机自启**：设置是否开机自动启动
 - **存储管理**：配置剪切板历史保留时长
+- **历史清理**：设置重复内容合并时间，主动去重或按日期批量删除
 
 ## 开发指南
 
@@ -131,7 +142,7 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 
 ```bash
 # 克隆项目
-git clone https://github.com/hu-qi-jia/copy-creator.git
+git clone https://github.com/baihejiangnan/copy-creator.git
 cd copy-creator/copy-creator
 
 # 安装依赖
