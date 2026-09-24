@@ -97,7 +97,9 @@ function trimCache(cache: Record<string, string>, maxEntries: number) {
 }
 
 async function getFullContent(record: ClipboardRecord): Promise<string> {
-  if (!record.content_truncated) return record.content;
+  // API keys are intentionally represented by previews in list results.
+  // Fetch the original only when the user explicitly copies or pastes one.
+  if (!record.content_truncated && !record.is_api_key) return record.content;
   return invoke<string>("get_clipboard_record_content", { id: record.id });
 }
 

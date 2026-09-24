@@ -7,10 +7,14 @@ interface TranslationSectionProps {
   localApiUrl: string;
   setLocalApiUrl: (url: string) => void;
   localApiKey: string;
+  apiKeyConfigured: boolean;
+  onClearApiKey: () => void;
   setLocalApiKey: (key: string) => void;
   localModel: string;
   setLocalModel: (model: string) => void;
   localGoogleApiKey: string;
+  googleApiKeyConfigured: boolean;
+  onClearGoogleApiKey: () => void;
   setLocalGoogleApiKey: (key: string) => void;
   localTranslateProxy: string;
   setLocalTranslateProxy: (proxy: string) => void;
@@ -22,10 +26,14 @@ export function TranslationSection({
   localApiUrl,
   setLocalApiUrl,
   localApiKey,
+  apiKeyConfigured,
+  onClearApiKey,
   setLocalApiKey,
   localModel,
   setLocalModel,
   localGoogleApiKey,
+  googleApiKeyConfigured,
+  onClearGoogleApiKey,
   setLocalGoogleApiKey,
   localTranslateProxy,
   setLocalTranslateProxy,
@@ -58,8 +66,9 @@ export function TranslationSection({
                 type="password"
                 value={localGoogleApiKey}
                 onChange={(e) => setLocalGoogleApiKey(e.target.value)}
-                placeholder={t("settings.googleNote")}
+                placeholder={googleApiKeyConfigured ? t("settings.savedKeyPlaceholder") : t("settings.googleNote")}
               />
+              {googleApiKeyConfigured && <button type="button" onClick={onClearGoogleApiKey}>{t("settings.clearSavedKey")}</button>}
             </div>
             <div className="settings-row vertical">
               <div className="settings-row-label">{t("settings.translateProxy")}</div>
@@ -90,8 +99,9 @@ export function TranslationSection({
                 type="password"
                 value={localApiKey}
                 onChange={(e) => setLocalApiKey(e.target.value)}
-                placeholder={t("settings.apiKey")}
+                placeholder={apiKeyConfigured ? t("settings.savedKeyPlaceholder") : t("settings.apiKey")}
               />
+              {apiKeyConfigured && <button type="button" onClick={onClearApiKey}>{t("settings.clearSavedKey")}</button>}
             </div>
             <div className="settings-row vertical">
               <div className="settings-row-label">{t("settings.model")}</div>

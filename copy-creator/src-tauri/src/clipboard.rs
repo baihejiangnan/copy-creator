@@ -937,45 +937,114 @@ fn maybe_show_clipboard_notification(app: &AppHandle, record_type: &str, content
     }
 }
 
-/// Insert a new record into the DB and emit clipboard-update.
-/// Skips insertion only if the most recent record has identical type and content
-/// AND was created within the last 2 seconds (debounce window).
-/// Re-copies after 2 seconds are treated as intentional and recorded normally.
+fn find_duplicate_id(
+    conn: &rusqlite::Connection,
+    record_type: &str,
+    content: &str,
+    cutoff: &str,
+) -> rusqlite::Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, content FROM clipboard_records WHERE type = ?1 AND created_at >= ?2 ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![record_type, cutoff], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (id, stored_content) = row?;
+        if crate::secrets::reveal(&stored_content).as_deref() == Ok(content) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::find_duplicate_id;
+    use rusqlite::{params, Connection};
+
+    #[test]
+    fn finds_repeat_behind_other_records_only_inside_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE clipboard_records (id TEXT, type TEXT, content TEXT, created_at TEXT)").unwrap();
+        conn.execute("INSERT INTO clipboard_records VALUES (?1, ?2, ?3, ?4)", params!["original", "text", "same", "2026-09-24T12:00:00+00:00"]).unwrap();
+        conn.execute("INSERT INTO clipboard_records VALUES (?1, ?2, ?3, ?4)", params!["other", "text", "different", "2026-09-24T12:10:00+00:00"]).unwrap();
+        assert_eq!(find_duplicate_id(&conn, "text", "same", "2026-09-24T11:56:00+00:00").unwrap().as_deref(), Some("original"));
+        assert_eq!(find_duplicate_id(&conn, "text", "same", "2026-09-24T12:14:59+00:00").unwrap(), None);
+    }
+
+    #[test]
+    fn compares_protected_keys_by_full_value() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE clipboard_records (id TEXT, type TEXT, content TEXT, created_at TEXT)").unwrap();
+        let key = "sk-example-deepseek-secret-123456789";
+        let protected = crate::secrets::protect(key).unwrap();
+        conn.execute("INSERT INTO clipboard_records VALUES (?1, ?2, ?3, ?4)", params!["key", "text", protected, "2026-09-24T12:00:00+00:00"]).unwrap();
+        assert_eq!(find_duplicate_id(&conn, "text", key, "2026-09-24T11:59:00+00:00").unwrap().as_deref(), Some("key"));
+        assert_eq!(find_duplicate_id(&conn, "text", "sk-example-deepseek-secret-987654321", "2026-09-24T11:59:00+00:00").unwrap(), None);
+    }
+}
+
+/// Re-copying exact content within the configured window moves its existing
+/// record to the top, preserving favorites, notes and API key labels.
 fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
-    let one_second_ago = chrono::Utc::now() - chrono::Duration::seconds(1);
-    let cutoff = one_second_ago.to_rfc3339();
+    let now = chrono::Utc::now();
+    let window_seconds = crate::db::get_setting_sync(app, "dedupe_window_seconds")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| matches!(value, 1 | 5 | 30 | 60 | 300 | 900 | 1800))
+        .unwrap_or(900);
+    let cutoff = (now - chrono::Duration::seconds(window_seconds)).to_rfc3339();
+    let now = now.to_rfc3339();
 
-    let is_duplicate: bool = {
+    let duplicate_id = {
         let state = app.state::<crate::db::DbState>();
-        let x = match state.conn.lock() {
-            Ok(conn) => conn.query_row(
-                "SELECT type, content, created_at FROM clipboard_records ORDER BY created_at DESC LIMIT 1",
-                [],
-                |row| {
-                    let last_type: String = row.get(0)?;
-                    let last_content: String = row.get(1)?;
-                    let last_created: String = row.get(2)?;
-                    Ok(last_type == record_type && last_content == content && last_created >= cutoff)
-                },
-            )
-            .unwrap_or(false),
-            Err(_) => false,
+        let found = match state.conn.lock() {
+            Ok(conn) => match find_duplicate_id(&conn, record_type, content, &cutoff) {
+                Ok(Some(id)) => {
+                    if let Err(error) = conn.execute(
+                        "UPDATE clipboard_records SET created_at = ?1 WHERE id = ?2",
+                        rusqlite::params![&now, &id],
+                    ) {
+                        log::warn!("failed to refresh duplicate clipboard record: {error}");
+                        return;
+                    }
+                    Some(id)
+                }
+                Ok(None) => None,
+                Err(error) => {
+                    log::warn!("failed to check duplicate clipboard record: {error}");
+                    return;
+                }
+            },
+            Err(_) => return,
         };
-        x
+        found
     };
-
-    if is_duplicate {
+    if duplicate_id.is_some() {
+        let _ = app.emit("clipboard-refresh", ());
+        crate::db::increment_unread_if_hidden(app);
+        maybe_show_clipboard_notification(app, record_type, content);
+        crate::tray::schedule_tray_refresh(app);
         return;
     }
 
     let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let is_key = (record_type == "text" || record_type == "link") && crate::db::is_api_key(content);
+    let stored_content = if is_key {
+        match crate::secrets::protect(content) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!("API key was not saved because protection failed: {error}");
+                return;
+            }
+        }
+    } else { content.to_string() };
     let inserted = {
         let state = app.state::<crate::db::DbState>();
         let result = match state.conn.lock() {
             Ok(conn) => conn.execute(
                 "INSERT INTO clipboard_records (id, type, content, source_app, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![&id, record_type, content, "", &now],
+                rusqlite::params![&id, record_type, &stored_content, "", &now],
             ).is_ok(),
             Err(_) => false,
         };
@@ -986,7 +1055,7 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
     }
     // API Key detection
     let (is_key, key_preview, guessed_service) =
-        if (record_type == "text" || record_type == "link") && crate::db::is_api_key(content) {
+        if is_key {
             let preview = crate::db::make_key_preview(content);
             let guess = crate::db::guess_service(content).map(|s| s.to_string());
             if !crate::db::is_toast_shown_internal(app, &preview) {
@@ -1006,8 +1075,11 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
             (false, String::new(), None::<String>)
         };
 
-    let (event_content, content_length, content_truncated) =
-        make_text_event_content(record_type, content);
+    let (event_content, content_length, content_truncated) = if is_key {
+        (key_preview.clone(), key_preview.chars().count() as i64, false)
+    } else {
+        make_text_event_content(record_type, content)
+    };
 
     app.emit(
         "clipboard-update",

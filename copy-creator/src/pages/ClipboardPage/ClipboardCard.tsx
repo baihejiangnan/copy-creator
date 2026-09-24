@@ -10,6 +10,7 @@ import { ImageThumb } from "./ImageThumb";
 import { formatTime, getFileName, TYPE_META } from "./utils";
 import ApiKeyLabelPanel from "./ApiKeyLabelPanel";
 import FavoriteNoteEditor from "./FavoriteNoteEditor";
+import { providerTone } from "./providerBadge";
 import { useClipboardStore } from "../../stores/clipboardStore";
 
 const COLLAPSE_TEXT_LENGTH = 160;
@@ -215,8 +216,10 @@ function ClipboardCardInner({
   const hasLabel = Boolean(record.is_api_key && record.label);
   const isUnlabeled = Boolean(record.is_api_key && !record.label);
 
-  const badgeText =
-    record.label?.note || record.guessed_service || (record.is_api_key ? "未标注" : "");
+  // An sk- prefix is shared by multiple providers, so it cannot identify OpenAI.
+  const providerName = record.label?.service ||
+    (record.guessed_service !== "OpenAI" ? record.guessed_service : null);
+  const badgeText = providerName || t("clipboard.unlabeledProvider");
 
   return (
     <div
@@ -233,16 +236,25 @@ function ClipboardCardInner({
             <span className="noti-type-text">{record.is_api_key ? "API Key" : getTypeLabel(record.type)}</span>
           </span>
           {record.is_api_key && (
-            <span
-              className="api-key-badge"
-              onClick={(e) => {
-                e.stopPropagation();
-                setFavoriteNoteOpen(false);
-                setLabelOpen((v) => !v);
-              }}
-            >
-              {badgeText || "未标注"}
-            </span>
+            <div className="api-key-meta">
+              {record.label?.note && (
+                <span className="api-key-note" title={record.label.note}>{record.label.note}</span>
+              )}
+              <button
+                type="button"
+                className="api-key-badge"
+                data-tone={providerTone(providerName)}
+                title={providerName || t("clipboard.unlabeledProvider")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFavoriteNoteOpen(false);
+                  setLabelOpen((v) => !v);
+                }}
+              >
+                <span className="api-key-badge-dot" aria-hidden="true" />
+                <span className="api-key-badge-name">{badgeText}</span>
+              </button>
+            </div>
           )}
         </div>
 
@@ -309,6 +321,21 @@ function ClipboardCardInner({
         <div className="notititle clipboard-card-footer">
           <span className="clipboard-card-time">{formatTime(record.created_at)}</span>
           <div className="clipboard-card-actions">
+            {record.is_api_key && (
+              <button
+                className="card-detail-btn"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setFavoriteNoteOpen(false);
+                  setLabelOpen((open) => !open);
+                }}
+                aria-expanded={labelOpen}
+                title={t("clipboard.apiKeyDetails")}
+              >
+                {t("clipboard.apiKeyDetails")}
+              </button>
+            )}
             {record.is_favorite && (
               <button
                 className={`card-note-btn${record.favorite_note ? " has-note" : ""}`}
@@ -390,7 +417,16 @@ function ClipboardCardInner({
                 <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
                 <line x1="7" y1="7" x2="7.01" y2="7" />
               </svg>
-              标注 API 来源
+              {t("clipboard.apiKeyDetails")}
+            </button>
+          )}
+          {record.is_api_key && record.label?.api_base && (
+            <button className="ctx-menu-item" onClick={(event) => {
+              event.stopPropagation();
+              setCtxMenu(null);
+              invoke("paste_text", { text: record.label!.api_base }).catch(console.error);
+            }}>
+              {t("clipboard.pasteApiBase")}
             </button>
           )}
           {record.is_api_key && hasLabel && (

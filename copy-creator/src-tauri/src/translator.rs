@@ -86,7 +86,7 @@ async fn translate_ai(
         let m: String = conn.query_row(
             "SELECT value FROM settings WHERE key = 'ai_model'", [], |r| r.get(0),
         ).unwrap_or_else(|_| "gpt-3.5-turbo".to_string());
-        (url, key, m)
+        (url, crate::secrets::reveal(&key)?, m)
     };
 
     if api_url.is_empty() || api_key.is_empty() {
@@ -164,7 +164,7 @@ async fn translate_google(
         let proxy: String = conn.query_row(
             "SELECT value FROM settings WHERE key = 'translate_proxy'", [], |r| r.get(0),
         ).unwrap_or_default();
-        (key, proxy)
+        (crate::secrets::reveal(&key)?, proxy)
     };
 
     let mut builder = reqwest::Client::builder()

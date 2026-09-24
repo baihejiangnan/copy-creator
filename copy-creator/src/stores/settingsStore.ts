@@ -8,13 +8,16 @@ type ThemeMode = "light" | "dark";
 interface SettingsState {
   themeMode: ThemeMode;
   clipboardRetention: string;
+  dedupeWindowSeconds: number;
   defaultEngine: string;
   apiUrl: string;
   apiKey: string;
+  apiKeyConfigured: boolean;
   model: string;
   baiduAppId: string;
   baiduSecret: string;
   googleApiKey: string;
+  googleApiKeyConfigured: boolean;
   translateProxy: string;
   language: string;
   shortcutKey: string;
@@ -37,13 +40,16 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   themeMode: "light",
   clipboardRetention: "1month",
+  dedupeWindowSeconds: 900,
   defaultEngine: "google",
   apiUrl: "",
   apiKey: "",
+  apiKeyConfigured: false,
   model: "",
   baiduAppId: "",
   baiduSecret: "",
   googleApiKey: "",
+  googleApiKeyConfigured: false,
   translateProxy: "",
   language: "zh-CN",
   shortcutKey: "",
@@ -71,13 +77,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({
         themeMode: settings.theme === "dark" ? "dark" : "light",
         clipboardRetention: settings.clipboard_retention || "1month",
+        dedupeWindowSeconds: Number(settings.dedupe_window_seconds) || 900,
         defaultEngine: settings.default_translate_engine || "google",
         apiUrl: settings.ai_api_url || "",
-        apiKey: settings.ai_api_key || "",
+        apiKey: "",
+        apiKeyConfigured: settings.ai_api_key_configured === "true",
         model: settings.ai_model || "",
         baiduAppId: settings.baidu_appid || "",
         baiduSecret: settings.baidu_secret || "",
-        googleApiKey: settings.google_api_key || "",
+        googleApiKey: "",
+        googleApiKeyConfigured: settings.google_api_key_configured === "true",
         translateProxy: settings.translate_proxy || "",
         language: settings.language || "zh-CN",
         shortcutKey: settings.shortcut_key || "",

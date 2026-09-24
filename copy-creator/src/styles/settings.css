@@ -514,6 +514,12 @@
   transition: background 0.15s, color 0.15s, transform 0.15s;
 }
 
+.settings-row-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .settings-transfer-btn:hover:not(:disabled) {
   background: var(--tool-btn-hover-bg);
   color: var(--tool-btn-hover-color);

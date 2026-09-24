@@ -24,6 +24,7 @@ export default function SettingsContent({ embedded }: Props) {
   const settings = useSettingsStore();
 
   const [localRetention, setLocalRetention] = useState(settings.clipboardRetention);
+  const [localDedupeWindow, setLocalDedupeWindow] = useState(settings.dedupeWindowSeconds);
   const [localEngine, setLocalEngine] = useState(settings.defaultEngine);
   const [localApiUrl, setLocalApiUrl] = useState(settings.apiUrl);
   const [localApiKey, setLocalApiKey] = useState(settings.apiKey);
@@ -65,6 +66,7 @@ export default function SettingsContent({ embedded }: Props) {
 
   useEffect(() => {
     setLocalRetention(settings.clipboardRetention);
+    setLocalDedupeWindow(settings.dedupeWindowSeconds);
     setLocalEngine(settings.defaultEngine);
     setLocalApiUrl(settings.apiUrl);
     setLocalApiKey(settings.apiKey);
@@ -161,11 +163,10 @@ export default function SettingsContent({ embedded }: Props) {
 
     await settings.setSettingsBatch({
       clipboard_retention: localRetention,
+      dedupe_window_seconds: String(localDedupeWindow),
       default_translate_engine: localEngine,
       ai_api_url: localApiUrl,
-      ai_api_key: localApiKey,
       ai_model: localModel,
-      google_api_key: localGoogleApiKey,
       translate_proxy: localTranslateProxy,
       language: localLang,
       max_history_items: String(maxHistoryItems),
@@ -175,6 +176,11 @@ export default function SettingsContent({ embedded }: Props) {
       large_image_handling: localLargeImageHandling,
       clipboard_notifications: localClipboardNotifications ? "1" : "0",
     });
+
+    if (localApiKey) await settings.setSetting("ai_api_key", localApiKey);
+    if (localGoogleApiKey) await settings.setSetting("google_api_key", localGoogleApiKey);
+    setLocalApiKey("");
+    setLocalGoogleApiKey("");
 
     const oldKey = settings.shortcutKey;
     const newKey = localShortcutKey;
@@ -238,6 +244,8 @@ export default function SettingsContent({ embedded }: Props) {
       />
 
       <ClipboardSection
+        dedupeWindowSeconds={localDedupeWindow}
+        setDedupeWindowSeconds={setLocalDedupeWindow}
         maxHistoryItems={localMaxHistoryItems}
         setMaxHistoryItems={setLocalMaxHistoryItems}
         maxStorageMb={localMaxStorageMb}
@@ -245,6 +253,7 @@ export default function SettingsContent({ embedded }: Props) {
         notifications={localClipboardNotifications}
         setNotifications={setLocalClipboardNotifications}
         stats={storageStats}
+        onCleanup={loadStorageStats}
       />
 
       <ImageSection
@@ -284,10 +293,14 @@ export default function SettingsContent({ embedded }: Props) {
         localApiUrl={localApiUrl}
         setLocalApiUrl={setLocalApiUrl}
         localApiKey={localApiKey}
+        apiKeyConfigured={settings.apiKeyConfigured}
+        onClearApiKey={() => { invoke("set_setting", { key: "ai_api_key", value: "" }).then(() => { setLocalApiKey(""); settings.loadSettings(); }).catch(console.error); }}
         setLocalApiKey={setLocalApiKey}
         localModel={localModel}
         setLocalModel={setLocalModel}
         localGoogleApiKey={localGoogleApiKey}
+        googleApiKeyConfigured={settings.googleApiKeyConfigured}
+        onClearGoogleApiKey={() => { invoke("set_setting", { key: "google_api_key", value: "" }).then(() => { setLocalGoogleApiKey(""); settings.loadSettings(); }).catch(console.error); }}
         setLocalGoogleApiKey={setLocalGoogleApiKey}
         localTranslateProxy={localTranslateProxy}
         setLocalTranslateProxy={setLocalTranslateProxy}

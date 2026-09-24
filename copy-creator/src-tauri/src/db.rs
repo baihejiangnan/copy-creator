@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
+use chrono::TimeZone;
 
 // === API Key Detection ===
 
@@ -21,9 +22,6 @@ pub fn is_api_key(content: &str) -> bool {
 }
 
 pub fn guess_service(content: &str) -> Option<&'static str> {
-    if content.starts_with("sk-") {
-        return Some("OpenAI");
-    }
     if content.starts_with("AIza") {
         return Some("Gemini");
     }
@@ -63,7 +61,7 @@ fn category_sql(category: &Option<String>) -> (String, String) {
             "AND is_favorite = 1".to_string(),
         ),
         Some("apikey") => (
-            "WHERE (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
+            "WHERE (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'dpapi:v1:%' OR content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
             "AND (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
         ),
         _ => ("".to_string(), "".to_string()),
@@ -101,6 +99,43 @@ pub struct DbState {
     pub conn: Mutex<Connection>,
 }
 
+fn migrate_secrets(conn: &mut Connection) -> Result<(), String> {
+    let settings: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT key, value FROM settings WHERE key IN ('ai_api_key', 'google_api_key', 'baidu_secret') AND value <> ''").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())?;
+        rows
+    };
+    let clipboard: Vec<(String, String, bool)> = {
+        let mut stmt = conn.prepare("SELECT id, content, user_api_key FROM clipboard_records WHERE type IN ('text', 'link')").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0)))
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())?;
+        rows
+    };
+    let mut updates = Vec::new();
+    for (key, value) in settings {
+        if !crate::secrets::is_protected(&value) {
+            updates.push((true, key, crate::secrets::protect(&value)?));
+        }
+    }
+    for (id, value, user_key) in clipboard {
+        if !crate::secrets::is_protected(&value) && (user_key || is_api_key(&value)) {
+            updates.push((false, id, crate::secrets::protect(&value)?));
+        }
+    }
+    if updates.is_empty() { return Ok(()); }
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for (setting, key, value) in updates {
+        let sql = if setting { "UPDATE settings SET value = ?2 WHERE key = ?1" } else { "UPDATE clipboard_records SET content = ?2 WHERE id = ?1" };
+        tx.execute(sql, params![key, value]).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 const CLIPBOARD_CONTENT_PREVIEW_CHARS: usize = 600;
 const FAVORITE_NOTE_MAX_CHARS: usize = 200;
 
@@ -129,7 +164,12 @@ fn clipboard_record_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<serde_json
     let user_api_key = row.get::<_, i64>(5)?;
     let is_favorite = row.get::<_, i64>(6)?;
     let favorite_note = row.get::<_, String>(7)?;
-    let (list_content, content_length, content_truncated) = if rec_type == "text" {
+    let is_key = (rec_type == "text" || rec_type == "link")
+        && (user_api_key != 0 || crate::secrets::is_protected(&content) || is_api_key(&content));
+    let key_value = if is_key { crate::secrets::reveal(&content).unwrap_or_default() } else { String::new() };
+    let (list_content, content_length, content_truncated) = if is_key {
+        (make_key_preview(&key_value), 0, false)
+    } else if rec_type == "text" {
         make_content_preview(&content)
     } else {
         (content, 0, false)
@@ -149,6 +189,9 @@ fn clipboard_record_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<serde_json
         "source_app": source_app,
         "created_at": created_at,
         "user_api_key": user_api_key,
+        "is_api_key": is_key,
+        "key_preview": if is_key { make_key_preview(&key_value) } else { String::new() },
+        "guessed_service": if is_key { guess_service(&key_value) } else { None },
         "is_favorite": is_favorite != 0,
         "favorite_note": favorite_note,
     }))
@@ -490,7 +533,7 @@ fn migrate_explorer_addresses(conn: &Connection) -> rusqlite::Result<usize> {
 
 pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let path = db_path(app);
-    let conn = Connection::open(&path)?;
+    let mut conn = Connection::open(&path)?;
 
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8000;",
@@ -550,6 +593,7 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         );
 
         INSERT OR IGNORE INTO settings (key, value) VALUES ('clipboard_retention', '1month');
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('dedupe_window_seconds', '900');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('default_translate_engine', 'google');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', 'light');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('language', 'zh-CN');
@@ -577,6 +621,10 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             is_expired  INTEGER DEFAULT 0,
             created_at  TEXT NOT NULL,
             updated_at  TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS api_services (
+            name TEXT PRIMARY KEY,
+            api_base TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS toast_shown (
@@ -624,6 +672,11 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     // Runtime migrations for existing databases
     migrate_clipboard_record_schema(&conn)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO api_services (name, api_base) SELECT service, api_base FROM api_key_labels WHERE service <> '' ORDER BY updated_at DESC",
+        [],
+    )?;
+    migrate_secrets(&mut conn)?;
 
     app.manage(DbState {
         conn: Mutex::new(conn),
@@ -833,21 +886,18 @@ pub fn get_clipboard_records(
         .into_iter()
         .map(|rec| {
             let rec_type = rec["type"].as_str().unwrap_or("").to_string();
-            let content = rec["content"].as_str().unwrap_or("").to_string();
             let user_key = rec["user_api_key"].as_i64().unwrap_or(0) != 0;
             let (is_key, key_preview_val, guess_val, label_val) =
-                if (rec_type == "text" || rec_type == "link") && (user_key || is_api_key(&content))
+                if (rec_type == "text" || rec_type == "link") && rec["is_api_key"].as_bool().unwrap_or(false)
                 {
-                    let kp = make_key_preview(&content);
-                    let g = guess_service(&content)
-                        .map(|s| serde_json::Value::String(s.to_string()))
-                        .unwrap_or(serde_json::Value::Null);
+                    let kp = rec["key_preview"].clone();
+                    let g = rec["guessed_service"].clone();
                     let rid = rec["id"].as_str().unwrap_or("");
                     let lbl = label_map
                         .get(rid)
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
-                    (true, serde_json::Value::String(kp), g, lbl)
+                    (true, kp, g, lbl)
                 } else {
                     (
                         false,
@@ -878,12 +928,13 @@ pub fn get_clipboard_records(
 pub fn get_clipboard_record_content(app: AppHandle, id: String) -> Result<String, String> {
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    conn.query_row(
+    let content: String = conn.query_row(
         "SELECT content FROM clipboard_records WHERE id = ?1",
         params![id],
         |row| row.get::<_, String>(0),
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    crate::secrets::reveal(&content)
 }
 
 #[derive(Clone)]
@@ -902,7 +953,7 @@ pub fn get_clipboard_action_record(
 ) -> Result<ClipboardActionRecord, String> {
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    conn.query_row(
+    let mut record = conn.query_row(
         "SELECT id, type, content, created_at, user_api_key, is_favorite FROM clipboard_records WHERE id = ?1",
         params![id],
         |row| {
@@ -916,7 +967,9 @@ pub fn get_clipboard_action_record(
             })
         },
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    record.content = crate::secrets::reveal(&record.content)?;
+    Ok(record)
 }
 
 pub fn get_recent_clipboard_records(
@@ -942,8 +995,12 @@ pub fn get_recent_clipboard_records(
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let mut records = rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    for record in &mut records {
+        record.content = crate::secrets::reveal(&record.content)?;
+    }
+    Ok(records)
 }
 
 #[tauri::command]
@@ -1330,6 +1387,9 @@ pub fn clear_translation_history(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_setting(app: AppHandle, key: String) -> Result<String, String> {
+    if crate::secrets::is_setting_secret(&key) {
+        return Err("secret settings cannot be read by the webview".to_string());
+    }
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     Ok(conn
@@ -1369,22 +1429,25 @@ pub fn get_all_settings(
     let mut map = std::collections::HashMap::new();
     for row in rows {
         let (k, v) = row.map_err(|e| e.to_string())?;
-        map.insert(k, v);
+        if crate::secrets::is_setting_secret(&k) {
+            map.insert(format!("{k}_configured"), (!v.is_empty()).to_string());
+        } else {
+            map.insert(k, v);
+        }
     }
     Ok(map)
 }
 
 const EXPORT_SETTING_KEYS: &[&str] = &[
     "clipboard_retention",
+    "dedupe_window_seconds",
     "default_translate_engine",
     "theme",
     "language",
     "radial_menu_enabled",
     "shortcut_key",
     "ai_api_url",
-    "ai_api_key",
     "ai_model",
-    "google_api_key",
     "translate_proxy",
     "max_history_items",
     "max_storage_mb",
@@ -1492,9 +1555,14 @@ pub async fn export_user_data(app: AppHandle) -> Result<serde_json::Value, Strin
                 })
             })
             .map_err(|e| e.to_string())?;
-        let favorites = rows
+        let favorites: Vec<FavoriteExportRecord> = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+        let favorites: Vec<FavoriteExportRecord> = favorites.into_iter().filter(|record| {
+            !record.user_api_key
+                && !crate::secrets::is_protected(&record.content)
+                && !is_api_key(&record.content)
+        }).collect();
         (settings, favorites)
     };
 
@@ -1533,6 +1601,7 @@ fn validate_import_setting(key: &str, value: &str) -> Option<String> {
 
     let valid = match key {
         "clipboard_retention" => matches!(value, "1week" | "1month" | "3months"),
+        "dedupe_window_seconds" => matches!(value, "1" | "5" | "30" | "60" | "300" | "900" | "1800"),
         "default_translate_engine" => matches!(value, "google" | "ai"),
         "theme" => matches!(value, "light" | "dark"),
         "language" => matches!(value, "zh-CN" | "en"),
@@ -1613,6 +1682,11 @@ pub async fn import_user_data(app: AppHandle) -> Result<serde_json::Value, Strin
             return Err("backup contains an invalid favorite record".to_string());
         }
         favorite.favorite_note = favorite.favorite_note.trim().to_string();
+        if (favorite.record_type == "text" || favorite.record_type == "link")
+            && (favorite.user_api_key || is_api_key(&favorite.content))
+        {
+            favorite.content = crate::secrets::protect(&favorite.content)?;
+        }
 
         if favorite.record_type == "image" && !existing_ids.contains(&favorite.id) {
             let image_result = (|| -> Result<(PathBuf, String), String> {
@@ -1789,6 +1863,10 @@ pub fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), Str
         return Err(format!("invalid value for setting: {key}"));
     }
 
+    let value = if crate::secrets::is_setting_secret(&key) && !value.is_empty() {
+        crate::secrets::protect(&value)?
+    } else { value };
+
     {
         let state = app.state::<DbState>();
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
@@ -1824,6 +1902,14 @@ pub fn set_settings_batch(
             return Err(format!("invalid value for setting: {key}"));
         }
     }
+
+    let settings: std::collections::HashMap<String, String> = settings.into_iter()
+        .map(|(key, value)| {
+            if crate::secrets::is_setting_secret(&key) && !value.is_empty() {
+                crate::secrets::protect(&value).map(|protected| (key, protected))
+            } else { Ok((key, value)) }
+        })
+        .collect::<Result<_, _>>()?;
 
     {
         let state = app.state::<DbState>();
@@ -1927,6 +2013,10 @@ fn migrate_storage(app: &AppHandle, new_path: &str) -> Result<(), String> {
                 is_expired  INTEGER DEFAULT 0,
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS api_services (
+                name TEXT PRIMARY KEY,
+                api_base TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS toast_shown (
                 key_preview TEXT PRIMARY KEY
@@ -2073,17 +2163,160 @@ pub fn save_api_key_label(
     api_base: String,
     note: String,
 ) -> Result<(), String> {
+    let service = service.trim().to_string();
+    let api_base = api_base.trim().to_string();
+    let note = note.trim().to_string();
+    if service.is_empty() || service.chars().count() > 80 || note.chars().count() > 100 {
+        return Err("invalid API key label".to_string());
+    }
+    if !api_base.is_empty() {
+        let url = reqwest::Url::parse(&api_base).map_err(|_| "invalid Base URL")?;
+        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() || api_base.len() > 2048 {
+            return Err("invalid Base URL".to_string());
+        }
+    }
     let state = app.state::<DbState>();
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute(
         "INSERT INTO api_key_labels (record_id, key_preview, service, api_base, note, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(record_id) DO UPDATE SET service=?3, api_base=?4, note=?5, updated_at=?7",
         params![record_id, key_preview, service, api_base, note, &now, &now],
     )
     .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO api_services (name, api_base) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET api_base = excluded.api_base",
+        params![service, api_base],
+    ).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct CleanupRecord {
+    id: String,
+    record_type: String,
+    content: String,
+    is_favorite: bool,
+    has_label: bool,
+    created_at: String,
+}
+
+fn cleanup_cutoff(period: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    let today = chrono::Local::now().date_naive();
+    let date = match period {
+        "today" => Some(today),
+        "3days" => today.checked_sub_days(chrono::Days::new(3)),
+        "7days" => today.checked_sub_days(chrono::Days::new(7)),
+        "1month" => today.checked_sub_months(chrono::Months::new(1)),
+        "2months" => today.checked_sub_months(chrono::Months::new(2)),
+        _ => return Err("invalid cleanup period".to_string()),
+    };
+    let date = date.ok_or_else(|| "invalid cleanup date".to_string())?;
+    let midnight = date.and_hms_opt(0, 0, 0).ok_or_else(|| "invalid cleanup time".to_string())?;
+    chrono::Local
+        .from_local_datetime(&midnight)
+        .earliest()
+        .map(|time| time.with_timezone(&chrono::Utc))
+        .ok_or_else(|| "invalid local cleanup time".to_string())
+}
+
+fn cleanup_candidates(conn: &Connection, mode: &str, period: Option<&str>) -> Result<Vec<CleanupRecord>, String> {
+    let cutoff = if mode == "older_than" {
+        Some(cleanup_cutoff(period.ok_or_else(|| "missing cleanup period".to_string())?)?)
+    } else if mode == "dedupe" {
+        None
+    } else {
+        return Err("invalid cleanup mode".to_string());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.type, r.content, r.is_favorite, EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = r.id), r.created_at FROM clipboard_records r ORDER BY r.created_at DESC",
+    ).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| {
+        Ok(CleanupRecord {
+            id: row.get(0)?, record_type: row.get(1)?, content: row.get(2)?,
+            is_favorite: row.get::<_, i64>(3)? != 0,
+            has_label: row.get::<_, i64>(4)? != 0,
+            created_at: row.get(5)?,
+        })
+    }).map_err(|e| e.to_string())?;
+    let mut records = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?;
+    if let Some(cutoff) = cutoff {
+        return Ok(records.into_iter().filter(|record| {
+            !record.is_favorite && chrono::DateTime::parse_from_rfc3339(&record.created_at)
+                .is_ok_and(|created_at| created_at < cutoff)
+        }).collect());
+    }
+    records.sort_by(|left, right| {
+        let left_time = chrono::DateTime::parse_from_rfc3339(&left.created_at).ok();
+        let right_time = chrono::DateTime::parse_from_rfc3339(&right.created_at).ok();
+        right_time.cmp(&left_time).then_with(|| right.created_at.cmp(&left.created_at))
+    });
+    let mut groups: HashMap<(String, String), Vec<CleanupRecord>> = HashMap::new();
+    for record in records {
+        let plaintext = crate::secrets::reveal(&record.content)?;
+        groups.entry((record.record_type.clone(), plaintext)).or_default().push(record);
+    }
+    let mut candidates = Vec::new();
+    for group in groups.into_values() {
+        if group.len() < 2 { continue; }
+        let protected_exists = group.iter().any(|record| record.is_favorite || record.has_label);
+        for (index, record) in group.into_iter().enumerate() {
+            if !record.is_favorite && !record.has_label && (protected_exists || index > 0) {
+                candidates.push(record);
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+#[tauri::command]
+pub fn preview_clipboard_cleanup(app: AppHandle, mode: String, period: Option<String>) -> Result<usize, String> {
+    let state = app.state::<DbState>();
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    Ok(cleanup_candidates(&conn, &mode, period.as_deref())?.len())
+}
+
+#[tauri::command]
+pub fn apply_clipboard_cleanup(app: AppHandle, mode: String, period: Option<String>) -> Result<usize, String> {
+    let candidates = {
+        let state = app.state::<DbState>();
+        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let candidates = cleanup_candidates(&conn, &mode, period.as_deref())?;
+        if candidates.is_empty() { return Ok(0); }
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        for record in &candidates {
+            tx.execute("DELETE FROM api_key_labels WHERE record_id = ?1", params![&record.id]).map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM clipboard_records WHERE id = ?1", params![&record.id]).map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        candidates
+    };
+    let image_contents: Vec<String> = candidates.iter().filter(|record| record.record_type == "image").map(|record| record.content.clone()).collect();
+    let state = app.state::<DbState>();
+    let unreferenced = collect_unreferenced_image_contents(&state, &image_contents)?;
+    let base_dir = get_storage_dir(&app);
+    for content in unreferenced { remove_stored_image(&base_dir, &content); }
+    let _ = app.emit("clipboard-refresh", ());
+    crate::tray::schedule_tray_refresh(&app);
+    Ok(candidates.len())
+}
+
+#[tauri::command]
+pub fn list_api_services(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    let state = app.state::<DbState>();
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT name, api_base FROM api_services ORDER BY name COLLATE NOCASE")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "name": row.get::<_, String>(0)?,
+            "apiBase": row.get::<_, String>(1)?,
+        }))
+    }).map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2195,9 +2428,13 @@ pub fn is_toast_shown(app: AppHandle, key_preview: String) -> bool {
 pub fn set_user_api_key(app: AppHandle, id: String, value: bool) -> Result<(), String> {
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let content: String = conn.query_row("SELECT content FROM clipboard_records WHERE id = ?1", params![&id], |row| row.get(0)).map_err(|e| e.to_string())?;
+    let stored_content = if value && !crate::secrets::is_protected(&content) {
+        crate::secrets::protect(&content)?
+    } else { content };
     conn.execute(
-        "UPDATE clipboard_records SET user_api_key = ?1 WHERE id = ?2",
-        params![value as i64, id],
+        "UPDATE clipboard_records SET user_api_key = ?1, content = ?2 WHERE id = ?3",
+        params![value as i64, stored_content, id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -2206,6 +2443,83 @@ pub fn set_user_api_key(app: AppHandle, id: String, value: bool) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cleanup_test_connection() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clipboard_records (
+                id TEXT PRIMARY KEY, type TEXT NOT NULL, content TEXT NOT NULL,
+                is_favorite INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+            );
+            CREATE TABLE api_key_labels (record_id TEXT PRIMARY KEY);",
+        ).unwrap();
+        conn
+    }
+
+    #[test]
+    fn manual_dedupe_keeps_favorites_and_labeled_keys() {
+        let conn = cleanup_test_connection();
+        let protected_key = crate::secrets::protect("sk-example-secret").unwrap();
+        for (id, content, favorite, created_at) in [
+            ("old", "same", 0, "2026-09-20T10:00:00Z"),
+            ("new", "same", 0, "2026-09-21T10:00:00Z"),
+            ("favorite", "same", 1, "2026-09-19T10:00:00Z"),
+            ("key", protected_key.as_str(), 0, "2026-09-22T10:00:00Z"),
+            ("key-duplicate", "sk-example-secret", 0, "2026-09-23T10:00:00Z"),
+        ] {
+            conn.execute(
+                "INSERT INTO clipboard_records (id, type, content, is_favorite, created_at) VALUES (?1, 'text', ?2, ?3, ?4)",
+                params![id, content, favorite, created_at],
+            ).unwrap();
+        }
+        conn.execute("INSERT INTO api_key_labels (record_id) VALUES ('key')", []).unwrap();
+        let mut ids: Vec<_> = cleanup_candidates(&conn, "dedupe", None).unwrap()
+            .into_iter().map(|record| record.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["key-duplicate", "new", "old"]);
+    }
+
+    #[test]
+    fn bulk_delete_uses_local_day_boundary_and_skips_favorites() {
+        let conn = cleanup_test_connection();
+        let cutoff = cleanup_cutoff("today").unwrap();
+        let before = (cutoff - chrono::Duration::seconds(1)).to_rfc3339();
+        let after = cutoff.to_rfc3339();
+        for (id, favorite, created_at) in [
+            ("old", 0, before.as_str()),
+            ("favorite", 1, before.as_str()),
+            ("today", 0, after.as_str()),
+        ] {
+            conn.execute(
+                "INSERT INTO clipboard_records (id, type, content, is_favorite, created_at) VALUES (?1, 'text', ?1, ?2, ?3)",
+                params![id, favorite, created_at],
+            ).unwrap();
+        }
+        let ids: Vec<_> = cleanup_candidates(&conn, "older_than", Some("today")).unwrap()
+            .into_iter().map(|record| record.id).collect();
+        assert_eq!(ids, ["old"]);
+    }
+
+    #[test]
+    fn ambiguous_sk_prefix_does_not_assign_a_provider() {
+        assert_eq!(guess_service("sk-example-shared-prefix"), None);
+        assert_eq!(guess_service("AIza-example"), Some("Gemini"));
+    }
+
+    #[test]
+    fn migrates_existing_plaintext_secrets() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE clipboard_records (id TEXT PRIMARY KEY, type TEXT NOT NULL, content TEXT NOT NULL, user_api_key INTEGER DEFAULT 0);").unwrap();
+        conn.execute("INSERT INTO settings VALUES ('ai_api_key', 'sk-example-translation-secret')", []).unwrap();
+        conn.execute("INSERT INTO clipboard_records VALUES ('one', 'text', 'sk-example-clipboard-secret', 0)", []).unwrap();
+        migrate_secrets(&mut conn).unwrap();
+        let setting: String = conn.query_row("SELECT value FROM settings WHERE key = 'ai_api_key'", [], |row| row.get(0)).unwrap();
+        let clipboard: String = conn.query_row("SELECT content FROM clipboard_records WHERE id = 'one'", [], |row| row.get(0)).unwrap();
+        assert!(crate::secrets::is_protected(&setting));
+        assert!(crate::secrets::is_protected(&clipboard));
+        assert_eq!(crate::secrets::reveal(&setting).unwrap(), "sk-example-translation-secret");
+        assert_eq!(crate::secrets::reveal(&clipboard).unwrap(), "sk-example-clipboard-secret");
+    }
 
     #[test]
     fn favorite_migration_preserves_existing_clipboard_records() {

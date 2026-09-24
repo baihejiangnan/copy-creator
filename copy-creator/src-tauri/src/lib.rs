@@ -1,4 +1,5 @@
 mod clipboard;
+mod secrets;
 mod db;
 mod paste;
 mod shortcut;
@@ -284,6 +285,8 @@ pub fn run() {
             db::toggle_clipboard_favorite,
             db::set_clipboard_favorite_note,
             db::get_clipboard_storage_stats,
+            db::preview_clipboard_cleanup,
+            db::apply_clipboard_cleanup,
             db::get_clipboard_unread_count,
             db::mark_clipboard_read,
             db::get_phrase_groups,
@@ -319,6 +322,7 @@ pub fn run() {
             tray::update_tray_language,
             db::check_api_key,
             db::save_api_key_label,
+            db::list_api_services,
             db::get_api_key_label,
             db::delete_api_key_label,
             db::list_api_key_labels,
