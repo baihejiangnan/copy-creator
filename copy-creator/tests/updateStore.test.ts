@@ -90,6 +90,18 @@ test("errors survive finally, panel reinitialization and automatic cooldown; man
   assert.equal(f.store.getState().error, null); assert.equal(f.store.getState().result?.status, "upToDate"); assert.ok(f.store.getState().checkedAt);
 });
 
+test("a discovered update remains visible after a failed retry until a successful check clears it", async () => {
+  const f = fixture(); await f.store.getState().check();
+  f.handle(async () => { throw "updates.networkError"; });
+  await f.store.getState().check();
+  assert.equal(f.store.getState().result?.status, "available");
+  assert.equal(f.store.getState().error, "updates.networkError");
+  f.handle(async () => ({ ...available, status: "upToDate" }));
+  await f.store.getState().check();
+  assert.equal(f.store.getState().result?.status, "upToDate");
+  assert.equal(f.store.getState().error, null);
+});
+
 test("download progress is shared; failure releases busy state and prevents launching", async () => {
   const f = fixture(); await f.store.getState().check();
   const reply = deferred<unknown>(); f.handle(async (command, args) => {

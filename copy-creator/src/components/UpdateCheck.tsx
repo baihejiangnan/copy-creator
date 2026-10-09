@@ -21,7 +21,7 @@ export default function UpdateCheck() {
               {t("updates.downloadSigned")}
             </button>}
             {downloaded && <button className="dialog-btn secondary" disabled={busy} onClick={() => void launch()}>
-              {t(downloaded.mode === "installed" ? "updates.install" : "updates.openNewVersion")}
+              {t("updates.install")}
             </button>}
             <button className="project-link" onClick={() => void openLink(result.releaseUrl!)}>{t("updates.viewReleases")}</button>
           </>
@@ -49,7 +49,7 @@ export default function UpdateCheck() {
           <p>{result.notes}</p>
         </details>
       )}
-      {info && (result?.status === "noRelease" || error) && (
+      {info && (result?.status === "noRelease" || (error && result?.status !== "available")) && (
         <button className="project-link" onClick={() => void openLink(info.releasesUrl)}>
           {t("updates.viewReleases")}
         </button>

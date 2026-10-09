@@ -161,7 +161,7 @@ NotesFile 使用绝对路径最清楚；准备在已提交文档位置或仓库�
 
 | 文件 | 用途 |
 | --- | --- |
-| `Copy-Creator-<version>-portable.exe` | 便携程序 |
+| `Copy-Creator-<version>-portable.exe` | 手动分发的便携程序，并兼容 0.2.26/0.2.27 的便携更新入口；统一 MSI 的新客户端不通过此文件更新 |
 | `Copy-Creator-<version>-portable.exe.sig` | EXE 自身的 Tauri/minisign 签名 |
 | `Copy-Creator_<version>_x64.msi` | Windows x64 MSI |
 | `Copy-Creator_<version>_x64.msi.sig` | MSI 自身的签名 |
@@ -182,6 +182,6 @@ pwsh -NoProfile -File ../scripts/verify-update-release.ps1 -Directory '<六文�
 
 独立核验目录只放这六个下载文件，不附带日志；从可信客户端源码构建验证器，不从待验证 Release 下载一个自称可信的验证器。只有 Release 发布/上传使用维护者的 gh 认证，公开下载不用 gh token、Authorization header 或客户端 Token。`$ErrorActionPreference` 不能保证原生程序失败即停止；pnpm/git/cargo/node/gh 与验证器每步检查 `$LASTEXITCODE`，失败停止依赖步骤。`verify-update-release.ps1` 是本地文件验证，不会下载、安装或核验远端状态。
 
-再用已有新客户端检查更高版本、下载/验签/显式升级，用新版检查自身不提示升级；分别验证便携旧进程退出/新进程快捷键可用和 MSI 自定义目录安装/升级/卸载标记。用合成数据库核对便签/设置保存失败与超时不启动。旧 0.2.25 仍使用 REST 检查，须先手动升级一次；旧 NSIS 与没有新标记的 MSI 先手动过渡，不宣称支持跨安装方式的自动迁移。
+再用已有新客户端检查更高版本、下载/验签/显式升级，用新版检查自身不提示升级。统一 MSI 的客户端须分别验证便携首次 MSI 向导、安装版原目录升级/进度/完成后启动、旧进程退出/新版快捷键可用及安装/升级/卸载标记，并验证自动/手动发现新版的红点。用合成数据库核对便签/设置保存失败与超时不启动安装。已发布 0.2.26/0.2.27 仍按运行模式选择 EXE/MSI，不能把新源码的统一 MSI 行为写成旧客户端升级操作的行为。旧 0.2.25 仍使用 REST 检查，须先手动升级一次；旧 NSIS 与没有新标记的 MSI 先手动过渡，不宣称支持跨安装方式的自动迁移。
 
 本次本地结果及未执行的公开、安装与桌面联合范围见 [签名更新验证](../verification/2026-10-09-signed-updates.md)。

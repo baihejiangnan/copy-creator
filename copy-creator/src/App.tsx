@@ -343,10 +343,10 @@ function App() {
           <button className={`sidebar-footer-item ${aboutOpen ? "active" : ""}`}
             onClick={() => setAboutOpen(true)}
             title={updateAvailable ? t("updates.sidebarAvailable") : t("about.title")}
-            aria-label={t("about.title")} aria-haspopup="dialog">
+            aria-label={updateAvailable ? t("updates.sidebarAvailable") : t("about.title")} aria-haspopup="dialog">
             <span className="sidebar-footer-icon about-sidebar-icon">
               {Icons.about}
-              {updateAvailable && <span className="update-dot" />}
+              {updateAvailable && <span className="update-dot" aria-hidden="true" />}
             </span>
             <span className="sidebar-footer-label">{t("about.title")}</span>
           </button>

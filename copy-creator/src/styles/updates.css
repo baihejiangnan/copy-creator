@@ -37,8 +37,6 @@
 .project-link { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; font-size: var(--text-sm); cursor: pointer; overflow-wrap: anywhere; }
 .project-link:hover { text-decoration: underline; }
 .update-check > .project-link { margin-top: 8px; }
-.about-sidebar-icon { position: relative; }
-.update-dot { position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 
 .about-dialog {
   margin: auto;

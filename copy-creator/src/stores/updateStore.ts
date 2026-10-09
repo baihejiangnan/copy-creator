@@ -128,7 +128,9 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         if (!result && automatic && manualCheckRequested) result = await invoke<UpdateResult>("check_for_updates", { automatic: false });
         if (result) set({ result, checkedAt: Date.now(), error: null, errorDetail: null, downloaded: null, progress: null });
       } catch (error) {
-        set({ ...updateError(error, "updates.checkError"), result: null });
+        // A failed retry does not disprove a previously discovered update.
+        // Keep its sidebar badge; download still rechecks native metadata.
+        set(updateError(error, "updates.checkError"));
       } finally {
         set({ checking: false });
         checking = null;

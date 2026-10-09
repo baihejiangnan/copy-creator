@@ -685,6 +685,9 @@
   background: rgba(255, 255, 255, 0.2);
 }
 
+.about-sidebar-icon { position: relative; }
+.update-dot { position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+
 .panel-empty {
   display: flex;
   align-items: center;

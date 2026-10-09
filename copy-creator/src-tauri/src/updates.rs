@@ -279,14 +279,9 @@ fn select_package(metadata: &UpdateMetadata, mode: &'static str) -> Result<Check
         .clone()
         .unwrap_or_else(|| format!("v{version}"));
     update_package::artifact_name(&version, mode)?;
-    let key = if mode == "installed" {
-        "windows-x86_64"
-    } else {
-        "windows-x86_64-portable"
-    };
     let artifact = metadata
         .platforms
-        .get(key)
+        .get("windows-x86_64")
         .ok_or("updates.packageMissing")?
         .clone();
     update_package::validate_artifact(&artifact, &version, &tag, mode)?;
@@ -384,6 +379,30 @@ pub(crate) mod tests {
             notes: Some("Release notes".into()),
             pub_date: "2026-10-09T00:00:00Z".into(),
             platforms: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn both_running_modes_select_msi_and_never_fall_back_to_portable_exe() {
+        let mut release = metadata("0.3.0");
+        release.tag = Some("v0.3.0-baihejiangnan.1".into());
+        let artifact = Artifact {
+            url: "https://github.com/baihejiangnan/copy-creator/releases/download/v0.3.0-baihejiangnan.1/Copy-Creator_0.3.0_x64.msi".into(),
+            signature: include_str!("../tests/fixtures/update-package.txt.sig").into(),
+            size: Some(100),
+        };
+        release.platforms.insert("windows-x86_64".into(), artifact.clone());
+        let mut portable = artifact.clone();
+        portable.url = portable.url.replace("Copy-Creator_0.3.0_x64.msi", "Copy-Creator-0.3.0-portable.exe");
+        release.platforms.insert("windows-x86_64-portable".into(), portable);
+        for mode in ["installed", "portable"] {
+            let selected = select_package(&release, mode).unwrap();
+            assert_eq!(selected.artifact, artifact);
+            assert_eq!(selected.mode, mode);
+        }
+        release.platforms.remove("windows-x86_64");
+        for mode in ["installed", "portable"] {
+            assert_eq!(select_package(&release, mode).err().unwrap(), "updates.packageMissing");
         }
     }
 

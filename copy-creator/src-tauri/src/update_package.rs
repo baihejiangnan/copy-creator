@@ -1,7 +1,7 @@
 //! Signed Windows packages; paths and trust never come from the WebView.
 use crate::update_signature::{decode_signature, verify_file, MAX_UPDATE_BYTES};
 use serde::{Deserialize, Serialize};
-use std::{io::Write, path::PathBuf, time::Duration};
+use std::{ffi::OsString, io::Write, path::{Path, PathBuf}, time::Duration};
 use tauri::Manager;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -82,8 +82,7 @@ pub fn current_mode(app: &tauri::AppHandle) -> &'static str {
 
 pub fn artifact_name(version: &str, mode: &str) -> Result<String, String> {
     match mode {
-        "portable" => Ok(format!("Copy-Creator-{version}-portable.exe")),
-        "installed" => Ok(format!("Copy-Creator_{version}_x64.msi")),
+        "portable" | "installed" => Ok(format!("Copy-Creator_{version}_x64.msi")),
         "nsis" => Err("updates.installerUnsupported".into()),
         _ => Err("updates.platformUnsupported".into()),
     }
@@ -114,18 +113,45 @@ pub fn validate_artifact(
 }
 
 fn destination(app: &tauri::AppHandle, checked: &CheckedUpdate) -> Result<PathBuf, String> {
-    let name = artifact_name(&checked.version, checked.mode)?;
-    if checked.mode == "portable" {
-        let exe = std::env::current_exe().map_err(|_| "updates.fileError")?;
-        Ok(exe.parent().ok_or("updates.fileError")?.join(name))
-    } else {
-        Ok(app
-            .path()
-            .app_cache_dir()
-            .map_err(|_| "updates.fileError")?
-            .join("updates")
-            .join(name))
+    Ok(app
+        .path()
+        .app_cache_dir()
+        .map_err(|_| "updates.fileError")?
+        .join("updates")
+        .join(artifact_name(&checked.version, checked.mode)?))
+}
+
+fn msi_install_arguments(
+    package: &Path,
+    mode: &str,
+    current_exe: &Path,
+    parent_pid: u32,
+) -> Result<Vec<OsString>, String> {
+    match mode {
+        "portable" | "installed" => {}
+        "nsis" => return Err("updates.installerUnsupported".into()),
+        _ => return Err("updates.platformUnsupported".into()),
     }
+    let mut args = vec![
+        OsString::from("/i"),
+        package.as_os_str().to_owned(),
+        OsString::from("/norestart"),
+        OsString::from(format!("LAUNCHAPPARGS=--copy-creator-update-parent {parent_pid}")),
+    ];
+    if mode == "installed" {
+        // The registry marker already proved this is the installed executable.
+        // Preserve its directory even when the MSI's default registry search
+        // cannot find an installation owned by a different installer context.
+        let directory = current_exe.parent().ok_or("updates.launchError")?;
+        let mut install_dir = OsString::from("INSTALLDIR=");
+        install_dir.push(directory);
+        args.extend([OsString::from("/passive"), install_dir, OsString::from("AUTOLAUNCHAPP=1")]);
+    }
+    // First installation from a portable EXE retains the directory-selection
+    // wizard and its default launch checkbox (no second automatic launch).
+    // The MSI's launch action starts the installed executable, never
+    // a newly downloaded portable EXE.
+    Ok(args)
 }
 
 pub async fn download(
@@ -251,23 +277,15 @@ pub fn launch_verified(app: &tauri::AppHandle) -> Result<(), String> {
     )?;
     #[cfg(target_os = "windows")]
     {
-        if prepared.checked.mode == "installed" {
-            use std::os::windows::process::CommandExt;
-            let system = std::env::var_os("SystemRoot").ok_or("updates.launchError")?;
-            std::process::Command::new(PathBuf::from(system).join("System32/msiexec.exe"))
-                .arg("/i")
-                .arg(&prepared.path)
-                .creation_flags(0x08000000)
-                .spawn()
-                .map_err(|_| "updates.launchError")?;
-        } else {
-            std::process::Command::new(&prepared.path)
-                .arg("--copy-creator-update-parent")
-                .arg(std::process::id().to_string())
-                .current_dir(prepared.path.parent().ok_or("updates.fileError")?)
-                .spawn()
-                .map_err(|_| "updates.launchError")?;
-        }
+        use std::os::windows::process::CommandExt;
+        let system = std::env::var_os("SystemRoot").ok_or("updates.launchError")?;
+        let exe = std::env::current_exe().map_err(|_| "updates.launchError")?;
+        let args = msi_install_arguments(&prepared.path, prepared.checked.mode, &exe, std::process::id())?;
+        std::process::Command::new(PathBuf::from(system).join("System32/msiexec.exe"))
+            .args(args)
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|_| "updates.launchError")?;
         Ok(())
     }
     #[cfg(not(target_os = "windows"))]
@@ -312,6 +330,29 @@ mod tests {
     use super::*;
     const DATA: &[u8] = include_bytes!("../tests/fixtures/update-package.txt");
     const SIGNATURE: &str = include_str!("../tests/fixtures/update-package.txt.sig");
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn installed_upgrade_preserves_directory_and_relaunches_after_parent_exit() {
+        let args = msi_install_arguments(
+            Path::new(r"C:\缓存\updates\new.msi"), "installed",
+            Path::new(r"D:\自定义目录\Copy Creator\copy-creator.exe"), 1234,
+        ).unwrap();
+        assert_eq!(args, [
+            "/i", r"C:\缓存\updates\new.msi", "/norestart",
+            "LAUNCHAPPARGS=--copy-creator-update-parent 1234", "/passive",
+            r"INSTALLDIR=D:\自定义目录\Copy Creator", "AUTOLAUNCHAPP=1",
+        ].map(OsString::from));
+    }
+
+    #[test]
+    fn portable_transition_uses_first_install_wizard_without_duplicate_launch() {
+        let args = msi_install_arguments(Path::new("new.msi"), "portable", Path::new("old.exe"), 42).unwrap();
+        assert_eq!(args, ["/i", "new.msi", "/norestart", "LAUNCHAPPARGS=--copy-creator-update-parent 42"].map(OsString::from));
+        for (mode, error) in [("nsis", "updates.installerUnsupported"), ("unsupported", "updates.platformUnsupported")] {
+            assert_eq!(msi_install_arguments(Path::new("new.msi"), mode, Path::new("old.exe"), 42).unwrap_err(), error);
+        }
+    }
     #[cfg(target_os = "windows")]
     #[test]
     fn portable_successor_waits_for_predecessor_and_rejects_timeout() {
@@ -333,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn separate_platform_packages_require_exact_repository_tag_and_filename() {
+    fn msi_packages_require_exact_repository_tag_and_filename() {
         for mode in ["installed", "portable"] {
             let good = checked(mode);
             validate_artifact(
@@ -349,13 +390,7 @@ mod tests {
                 good.artifact
                     .url
                     .replace("v0.3.0-baihejiangnan.1", "v0.3.1"),
-                checked(if mode == "portable" {
-                    "installed"
-                } else {
-                    "portable"
-                })
-                .artifact
-                .url,
+                good.artifact.url.replace("Copy-Creator_0.3.0_x64.msi", "Copy-Creator-0.3.0-portable.exe"),
             ] {
                 let mut bad = good.artifact.clone();
                 bad.url = url;
