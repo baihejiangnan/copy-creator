@@ -1,13 +1,14 @@
 {
   "name": "copy-creator",
   "private": true,
-  "version": "0.2.25",
+  "version": "0.2.26",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test:unit": "node --experimental-strip-types --test tests/*.test.ts",
+    "release:windows": "pwsh -NoProfile -File ../scripts/release-windows.ps1",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -14,9 +14,13 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
     const actual=await window.__TAURI_INTERNALS__.invoke('get_storage_path');
     const canonical=value=>value.replace(/^\\\\\?\\/,'').replace(/\\$/,'').toLowerCase();
     if(canonical(actual)!==canonical(expected))throw Error('Refusing non-QA storage');
-    const entry=performance.getEntriesByType('resource').find(entry=>/\/main-[^/]+\.js$/.test(entry.name));
-    if(!entry)throw Error('QA main chunk missing');
-    const barriers=Object.values(await import(entry.name)).filter(value=>value?.run&&value?.getSnapshot&&value?.register);
+    // Shared imports can move the barrier into the lifecycle chunk. Inspect
+    // only these loaded application modules, and require one actual instance.
+    const entries=performance.getEntriesByType('resource').filter(entry=>
+      new URL(entry.name).origin===location.origin&&/\/(main|lifecycle)-[^/]+\.js$/.test(entry.name));
+    if(!entries.some(entry=>/\/main-/.test(entry.name)))throw Error('QA main chunk missing');
+    const barriers=[...new Set((await Promise.all(entries.map(entry=>import(entry.name))))
+      .flatMap(module=>Object.values(module)).filter(value=>value?.run&&value?.getSnapshot&&value?.register))];
     if(barriers.length!==1)throw Error('QA save barrier missing');
     await barriers[0].run('qa-refresh',async()=>{});
   },metadata.storageRoot||path.join(process.env.APPDATA,metadata.identifier));

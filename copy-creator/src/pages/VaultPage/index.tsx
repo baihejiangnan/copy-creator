@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icons } from "../../components/Icons";
 import SearchInput from "../../components/SearchInput";
+import RestartAsAdminButton from "../../components/RestartAsAdminButton";
 import { useVaultStore } from "../../stores/vaultStore";
 import { emptyVaultEntry } from "../../types/vault";
 import VaultGate from "./VaultGate";
@@ -29,7 +30,9 @@ function UnlockedVault() {
   const back = () => { clearSelected(); setMode("list"); };
   return <>
     <div ref={topRef}><VaultToolbar onChangeMaster={() => { clearSelected(); setMode("master"); }} masterDisabled={mode === "edit" || mode === "new"} /></div>
-    {error && <p className="vault-error" role="alert">{t(error)}</p>}
+    {error && <div className="vault-error" role="alert">{t(error)}
+      {error === "vault.pasteRequiresElevation" && <RestartAsAdminButton />}
+    </div>}
     {notice && <p className="vault-feedback" role="status">{t(notice)}</p>}
     {mode === "master" ? <ChangeMaster onBack={back} /> : mode === "generator" ? <><button type="button" className="vault-text-button" onClick={back}>← {t("vault.back")}</button><section className="vault-section"><PasswordGenerator /></section></> : mode === "new" || (mode === "edit" && selected) ? <EntryEditor key={selected?.id || "new"} initial={mode === "edit" && selected ? selected : emptyVaultEntry()} onCancel={mode === "edit" ? () => setMode("detail") : back} onSaved={() => setMode("detail")} /> : mode === "detail" && selected ? <EntryDetail entry={selected} onBack={back} onEdit={() => setMode("edit")} /> : <>
       <div className="vault-list-heading"><div><span className="vault-eyebrow">{t("vault.eyebrow")}</span><h2>{t("vault.yourWebsites")}</h2><p className="vault-caption">{t("vault.multipleAccounts")}</p></div><button className="vault-button primary" type="button" onClick={() => { clearSelected(); setMode("new"); }}>{Icons.add}{t("vault.newEntry")}</button></div>

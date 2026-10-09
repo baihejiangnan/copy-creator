@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "copy-creator"
-version = "0.2.25"
+version = "0.2.26"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -757,6 +757,7 @@ dependencies = [
  "enigo",
  "image",
  "log",
+ "minisign-verify",
  "rand 0.9.5",
  "reqwest 0.12.28",
  "rusqlite",
@@ -773,9 +774,11 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-notification",
  "tauri-plugin-process",
+ "tempfile",
  "tokio",
  "uuid",
  "windows 0.58.0",
+ "winreg 0.55.0",
  "zeroize",
 ]
 
@@ -2616,6 +2619,13 @@ dependencies = [
  "adler2",
  "simd-adler32",
 ]
+
+[[package]]
+name = "minisign-verify"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f9645cb765ea72b8111f36c522475d2daa0d22c957a9826437e97534bc4e9e"
+
 
 [[package]]
 name = "mio"

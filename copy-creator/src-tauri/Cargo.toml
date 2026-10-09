@@ -1,6 +1,7 @@
 [package]
 name = "copy-creator"
-version = "0.2.25"
+default-run = "copy-creator"
+version = "0.2.26"
 description = "PC clipboard manager, quick phrases, and translation tool"
 authors = ["Copy Creator Contributors"]
 license = "MIT"
@@ -23,6 +24,8 @@ diagnostics = ["rusqlite/trace"]
 serde_json = "1.0"
 sha2 = "0.10.9"
 semver = "1.0"
+minisign-verify = "0.2.5"
+tempfile = "3"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.11.1", features = ["protocol-asset", "tray-icon"] }
@@ -54,6 +57,7 @@ windows = { version = "0.58", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_Threading",
   "Win32_System_Com",
+  "Win32_System_Registry",
   "Win32_UI_Shell",
   "Win32_UI_Shell_Common",
   "Win32_UI_Accessibility",
@@ -61,3 +65,6 @@ windows = { version = "0.58", features = [
 tauri-plugin-process = "2.3.1"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-notification = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

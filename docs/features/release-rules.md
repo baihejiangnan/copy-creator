@@ -2,9 +2,11 @@
 
 本规则供接手提交、推送和发布的 Agent 使用。通用约束见 [AGENTS.md](../../AGENTS.md)，验收状态以 [TODO](../TODO.md) 为准；用户在当次任务中明确指定的仓库、分支、版本或发布范围优先。
 
+当前默认流程（2026-10-09 复核）：整理授权范围内的源码 → 固定提交与基础版本 → 从干净检出运行签名发行脚本 → 核验本地产物与相应桌面行为 → 按授权推送源码/标签 → 创建并核对草稿 → 已授权时公开并验证下载。包含新更新客户端的发行使用 §9 的 **EXE、MSI、两个签名、latest.json 和 SHA256SUMS.txt**；“推送并打包”只执行源码推送与本地构建，不自动创建或公开 Release。§1 为历史事实，§5/§8/§9 为当前执行入口。
+
 ## 1. 历史依据与默认方式
 
-2026-10-07 只读核对本地 Git 历史及 GitHub API：个人仓库目前只有一次公开 Release。以下区分已经发生的做法和补充的执行要求，不把一次发布推断成多次惯例。
+2026-10-07 的首次只读核对时，个人仓库只有 0.2.24 一次公开 Release；下表保留当时快照。2026-10-09 复核已有 0.2.24、0.2.25 两次公开 Release，当前 Latest 是 [0.2.25](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1)，构建源码 `8e76dabee6099ddd98c9a1fe475bf34d17eee5d5`，仅发布便携 EXE。详情见 [0.2.25 发布记录](../verification/2026-10-09-release-025.md)。这些历史发布不代表本轮签名客户端已经发布。
 
 | 项目 | 已核实的历史事实 |
 | --- | --- |
@@ -18,7 +20,7 @@
 | 提交风格 | `feat:`、`fix:`、`perf:`、`refactor:`、`docs:`、`chore:`；版本提交已有 `chore: release v0.2.24` 示例 |
 | 自动化 | 本地无 `.github/workflows/`；远端 Actions workflows 数量为 0，不能假设推送或打标签会自动编译发布 |
 
-默认延续：源码更新到个人仓库 `origin/main`；需要发布时在本地通过 Tauri CLI 构建 Windows 便携 EXE，再上传个人仓库 Release。历史记录不足以确认当时的具体构建命令、签名状态和全部桌面验收结果；后续步骤属于本规则补充的执行要求。
+历史默认：源码更新到个人仓库 `origin/main`；需要发布时在本地通过 Tauri CLI 构建 Windows 便携 EXE，再上传个人仓库 Release。历史记录不足以确认当时的具体构建命令、签名状态和全部桌面验收结果。2026-10-09 已接入公开元数据与签名下载；后续发行带该客户端的新版本时，使用 §9 的六文件签名流程，发布授权范围仍按 §2 判断。
 
 ## 2. 先判断授权范围
 
@@ -26,6 +28,7 @@
 | --- | --- |
 | “提交并推送”“更新远端仓库” | 检查、验证、提交并推送对应源码/文档；不自动改版本、打发布标签或创建 Release |
 | “编译”“构建便携版/安装包” | 生成并验证本地产物；不自动推送或公开发布 |
+| “推送更新并打包” | 整理、验证、提交并推送源码，同时生成本地产物；不自动推送发布标签、创建或公开 Release |
 | “推送并发布新版 Release” | 完成版本更新、检查、源码提交、构建验证、推送、标签和 Release 发布 |
 | “创建草稿 Release”或“发布预览版” | 保持草稿或设置 prerelease，不自行转正式版 |
 
@@ -37,22 +40,22 @@
 2. 查询 `gh release list --repo baihejiangnan/copy-creator`；`git fetch origin --prune` 后比较本地与远端。未完成的开发工作区不直接 pull、切分支或 rebase，避免混入或改写他人修改。
 3. 默认将本次授权范围内、整理且验证过的修改更新到 `origin/main`。当前在功能分支时先核对集成方式，不误推为 main；需要新建开发分支时沿用 `codex/` 前缀。历史既有直接 main 提交，也有上游 PR 合并，不据此强制个人仓库更新都走 PR。
 4. 按职责组织提交，沿用既有前缀，中文英文均可；版本调整可独立提交为 `chore: release v<应用版本>`。逐项审查后暂存，避免未审查的 `git add .` / `git add -A`。字体移出 public 等成组变化要同时纳入原路径删除和新文件。
-5. 不提交 `node_modules/`、`dist/`、`target/`、根目录 `releases/`、优化快照、临时日志、用户数据库、备份或真实密钥；需要版本管理的原始素材和隔离测试脚本应保留。
+5. 不提交 `node_modules/`、`dist/`、`target/`（含独立验证器的 target）、根目录 `releases/`、优化快照、临时日志、用户数据库、备份或真实私钥；需要版本管理的原始素材和隔离测试脚本应保留。签名客户端的 `updater.pub`、签名合成夹具、`.gitattributes`、WiX fragment、验证器源码/锁文件和发行脚本是必要源码，须随授权改动提交；公开公钥与测试签名不属于私钥。
 6. 推送前检查暂存 diff 和 `git diff --cached --check`，运行与改动相应的检查。确认 main 与最新 origin/main 的关系后正常快进推送 `git push origin main`；不向 upstream 推送，不默认强推、改写历史或绕过分支保护。
 7. 非快进或远端有新提交时重新 fetch、核对并安全集成，重新运行受影响检查；不能用强推解决。推送后查询远端 SHA，确认包含预期提交。
 
 ## 4. 版本与标签
 
 - 同步维护 `copy-creator/package.json`、`copy-creator/src-tauri/tauri.conf.json`、`copy-creator/src-tauri/Cargo.toml` 和 `Cargo.lock` 中本项目包的版本，不误替换依赖版本。`pnpm-lock.yaml` 的工具生成变化一并审查；当前格式没有独立根项目 version 字段。
-- 默认沿用标签 `v<应用版本>-baihejiangnan.<发布序号>`、标题 `Copy Creator <应用版本> 个人增强版`、附件 `Copy-Creator-<应用版本>-portable.exe`。如应用 `0.2.25`、标签 `v0.2.25-baihejiangnan.1`，仅作格式示例，不代表已指定下次版本。
-- **每次发布新的可升级二进制，都必须提高应用基础版本。** 当前更新逻辑取运行中的 Tauri 版本，与 Release 标签做语义版本比较。`0.2.24-baihejiangnan.2` 低于已安装的 `0.2.24`，单独递增个人版尾缀不会提示升级；`+build` 元数据也不能触发升级。依据见 [updates.rs](../../copy-creator/src-tauri/src/updates.rs) 与 [更新说明](updates.md)。
+- 默认沿用标签 `v<应用版本>-baihejiangnan.<发布序号>`、标题 `Copy Creator <应用版本> 个人增强版`，签名发行的六个附件见 §9。个人版后缀须为无前导零的正 32 位整数。下次版本由当次授权范围和最终改动确定，不复用已公开的 `0.2.25`；如采用下一补丁版本，仍须先核对远端没有占用对应版本/标签。
+- **每次发布新的可升级二进制，都必须提高应用基础版本。** 已发布的旧客户端比较 Release 标签；本次新客户端比较 `latest.json.version` 与运行中的 Tauri 版本，`tag` 单独保留个人版标签。单独递增个人版尾缀或 `+build` 元数据不能让相同基础版本触发升级。新元数据的 `version` 必须与 EXE/MSI 的基础版本一致。依据见 [updates.rs](../../copy-creator/src-tauri/src/updates.rs) 与 [更新说明](updates.md)。
 - 沿用历史命名时，应用使用基础版本，Release 使用对应个人版后缀。后缀具有 SemVer 预发布排序含义，但 GitHub 正式发布状态由 `draft` / `prerelease` 标记决定。
 - 发版前查询远端相关标签及正式 Release，确认标签不存在、新版本高于已分发的应用版本。用户指定版本若无法触发预期升级，先指出具体冲突。
 - 不移动既有发布标签，不覆盖已公开的同名二进制。源码修复或重新构建导致二进制变化时发布更高基础版本；纯说明/链接勘误可编辑原说明，不换附件。
 
 ## 5. 构建与验证
 
-应用工程在内层 `copy-creator/`。从明确、已提交且可追溯的 SHA 构建；共享工作区仍在变化时使用干净的隔离检出，不能混入未提交修改，也不能清理他人的工作区来制造“干净”。
+应用工程在内层 `copy-creator/`。从明确、已提交且可追溯的 SHA 构建；共享工作区仍在变化时使用干净的隔离检出，不能混入未提交修改，也不能清理他人的工作区来制造“干净”。本轮更新与终端权限改动仍有未提交文件，后继先审查和归并授权内容，不能复用 15:51 的签名验证产物作为后续完整工作区的新构建。两个任务的证据与剩余范围见 [签名更新验证](../verification/2026-10-09-signed-updates.md)、[终端权限验证](../verification/2026-10-09-terminal-permissions.md)。
 
 记录源码 SHA、Windows 版本、CPU 架构/目标 triple、Node/pnpm/Rust/Tauri 版本和实际命令。依赖以锁文件为准，使用 `pnpm install --frozen-lockfile`；不为发布顺手升级依赖或改 identifier。Cargo 使用现有锁文件，确认构建无意外锁文件变化。
 
@@ -67,21 +70,23 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 
 历史失败须记录具体输出，不得写“全部通过”；未解决失败说明对本次发布的影响，缺乏发布依据时保持草稿。仅文档推送按 AGENTS.md 检查链接、事实和 diff，无需完整构建。
 
-默认只发布便携 EXE，可执行：
+**当前默认打包入口是 §9 的 `pnpm release:windows`。** 它调用正式 Tauri 构建生成 MSI 与同次便携 EXE，再分别签名和校验；脚本本身不推送源码、不打标签、不创建 Release。正常签名打包已包含上述类型、前端测试、lint、Rust lib 单测及前端构建，无需在没有变化的情况下重复整套检查；需要完整 Cargo 默认测试目标或桌面检查时另按范围执行。
+
+只有用户明确要求单独构建便携 EXE、且不准备六文件更新发行时，使用以下直接 CLI 命令作为本地构建：
 
 ```powershell
-pnpm exec tauri build --no-bundle -- --locked
+node node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked
 ```
 
-本地 CLI 已确认支持 `--no-bundle` 和向 Cargo 传参；仍执行 `beforeBuildCommand` 中的 `pnpm build`，生成嵌入前端资源的生产 EXE。 2026-10-09 本机 pnpm 11.7.0 的 `exec` 剥离了上述 Cargo 分隔符，Tauri CLI 在编译前拒绝 `--locked`；实际成功采用等价的直接 CLI 调用 `node node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked --offline`。仍走 Tauri 构建及原前端钩子，不是直接 cargo 构建；其他 pnpm 版本先核对传参，保留失败日志。需要安装包时执行：
+该命令仍执行 `beforeBuildCommand` 中的 `pnpm build`，生成嵌入前端资源的生产 EXE。本机 pnpm 11.7.0 的 `exec` 曾剥离 Cargo 分隔符并被 CLI 拒绝，因此文档和签名脚本均直接调用已安装的 Tauri CLI node 入口。依赖已缓存且任务需要离线构建时才添加 Cargo `--offline`，不以它代替冻结依赖。明确需要额外 NSIS 本地产物时，可执行：
 
 ```powershell
-pnpm exec tauri build -- --locked
+node node_modules/@tauri-apps/cli/tauri.js build --ci --bundles nsis -- --locked
 ```
 
-当前 `bundle.targets = "all"`，Windows 可生成 NSIS/MSI；仅任务要求发布安装包时上传这些附件。`pnpm build` 的 dist、debug EXE 或直接 `cargo build --release` 的未核实资源产物，不能替代正式桌面构建。
+当前 `bundle.targets = "all"`，Windows 可生成 NSIS/MSI，但签名脚本显式选择 MSI；签名客户端的安装平台入口不支持用 NSIS 替换 MSI。NSIS 仅在用户要求时额外构建/发布，不混入六文件目录。`pnpm build` 的 dist、debug EXE 或直接 `cargo build --release` 的未核实资源产物，不能替代正式桌面构建。
 
-默认 EXE 路径为 `src-tauri/target/release/copy-creator.exe`，安装包在其 `bundle/`；指定 target 或 `CARGO_TARGET_DIR` 后路径会变化，以日志确认。将本次新生成的 EXE 复制到根目录 `releases/<标签>/` 并按规则命名，不从旧目录挑同名产物。记录字节数和 SHA-256，可用 `Get-FileHash -Algorithm SHA256 -LiteralPath <产物绝对路径>`。
+默认 EXE 路径为 `src-tauri/target/release/copy-creator.exe`，安装包在其 `bundle/`；签名脚本会复制和校验本次产物到 `releases/<标签>-<唯一 ID>/`，以本次成功摘要中的 `directory` 为准，不从旧目录挑同名文件。指定 target 或 `CARGO_TARGET_DIR` 后路径会变化，当前脚本的环境限制见 §9。记录字节数和 SHA-256，可用 `Get-FileHash -Algorithm SHA256 -LiteralPath <产物绝对路径>`。
 
 发布前验证待上传的最终 EXE，使用临时数据库、合成内容和隔离测试环境，不访问真实用户资料。覆盖启动/托盘、主窗/轮盘、快捷键/粘贴、图片、设置/更新入口及本次相关功能；涉及便签/保存/备份/搬迁时按 TODO 和设计收齐联合验收。生产构建通过不能替代桌面检查。
 
@@ -93,7 +98,7 @@ pnpm exec tauri build -- --locked
 2. 完成源码及版本提交、固定完整 SHA，从该 SHA 构建验证并记录产物大小/哈希。后续改变源码、版本、配置或资源时重新构建验证；只补验证记录/下载文档时可另作文档提交，明确二进制仍对应原构建 SHA。
 3. 推送整理后的 main，确认远端包含构建 SHA；标签指向实际构建 SHA，不随手标在后来的 HEAD。默认新建带说明的标签；历史个人版为轻量标签，附注标签属于补充追溯要求。只推本次标签，不用 `git push --tags` 批量上传其他标签。
 4. 使用 `gh release create` 创建草稿，显式指定 `--repo baihejiangnan/copy-creator`、`--verify-tag`、实际目标 SHA 和准备好的说明文件，上传本次验证的附件。`--verify-tag` 避免 CLI 自动创建错误标签；多行说明使用 UTF-8 文件与 `--notes-file`。
-5. 核对草稿标签解析后的源码 SHA、正文、附件名/大小/摘要及下载目标。已授权正式发布且验收满足时转公开正式版（`draft=false`、`prerelease=false`），确认是仓库 Latest；草稿/预览版不作为正式更新源。
+5. 核对草稿标签解析后的源码 SHA、正文、六个附件名/大小/摘要、两个平台的独立签名及下载目标。已授权正式发布且满足当次交付条件时转公开正式版（`draft=false`、`prerelease=false`），显式设置为 Latest 并核对结果；草稿/预览版不作为正式更新源。不把额外日志、溯源或 QA 文件用通配符一并上传。
 6. 发布后核对 Release 页面、附件状态及 `/releases/latest` 的标签/URL；对照本地 SHA-256 与远端资产摘要，摘要缺失时实际下载校验。验证旧版能发现新版、新版不误提示升级、下载入口正确。完成后才报告“已发布”；部分成功分别报告源码、标签、草稿和附件状态。
 
 README 下载区使用本次确定的标签和附件名；发布前链接属于待生效。发布失败时及时说明并修正文档，不能长期把不可用链接标为最新版。
@@ -105,7 +110,7 @@ README 下载区使用本次确定的标签和附件名；发布前链接属于�
 - 实际检查和桌面验证范围、影响使用的已知问题，不照抄上次测试数量。
 - 来源完整 SHA、产物字节数和 SHA-256。
 
-未完成的首发可靠性验收不能靠写“待验证”绕过。开发源码可先推送；未满足发布门槛的构建保留本地、草稿，或按明确授权发布预览版。
+开发源码与本地产物可以先交付，验收未完成默认保留本地或草稿。只有用户已明确接受本次列出的已知问题并授权相应公开发布时，才按该授权继续；如 0.2.25 的明确取舍，只代表那次发布，不自动延伸到新增签名升级/MSI/UAC 的未验收链路。公开状态不等于 TODO 验收通过，说明必须保留实际边界；授权范围已清楚时不重复询问。
 
 ## 7. 异常与交付
 
@@ -116,4 +121,67 @@ README 下载区使用本次确定的标签和附件名；发布前链接属于�
 
 ## 8. 可直接转交给执行 Agent 的指令
 
-> 请先阅读 AGENTS.md、docs/TODO.md 和 docs/features/release-rules.md，检查工作区、远端 main 和历史 Release，保留用户及其他 Agent 的修改。按我本次指定范围整理提交并更新 `origin/main`，不要向 upstream 推送。仅要求推送源码时，完成对应验证、提交、推送和远端 SHA 核对；同时要求发布 Release 时，按规则提高基础版本、从固定源码 SHA 构建并验证 Windows 便携 EXE，将标签绑定实际构建 SHA，创建并检查草稿后完成已授权的正式发布。不得用旧产物替代，不得仅递增个人版尾缀，不得把未验收功能写成已完成；最后报告真实提交、产物、验证和发布状态。
+按实际授权复制下面对应的一段；模板本身不扩大用户的任务范围。
+
+**推送源码并本地打包：**
+
+> 请按 AGENTS.md、docs/TODO.md 和 docs/features/release-rules.md 整理本次授权改动，审查未跟踪文件与并行任务修改，验证后提交并推送到 origin/main。需要对外分发的新二进制时按 §4 确定未占用的新基础版本，并同步四处版本。固定源码 SHA，从干净检出按 §9 运行 release:windows，生成并验证 EXE、MSI、两个签名、latest.json 和 SHA256SUMS.txt；不用 -AllowDirty 的产物替代正式构建。保留签名更新、终端权限和原有功能的验收边界；报告远端源码 SHA、本地产物目录、哈希、检查和剩余项。本次不推发布标签、不创建或公开 Release，不向 upstream 推送。
+
+**已授权推送并公开新版 Release：**
+
+> 请按 AGENTS.md、docs/TODO.md 和 docs/features/release-rules.md 完成本次授权的新版本源码与文档归并、版本更新、验证、提交和 origin/main 推送。从固定 SHA 的干净检出按 §9 构建并核验六个签名发行文件，完成当次要求的桌面验收。将本次新标签绑定实际构建 SHA，创建并核对草稿，再按已明确的发布授权转为公开正式 Latest。匿名独立下载并验签远端两包，核对 metadata/hash/Latest；区分旧 0.2.25 手动过渡和已有新客户端的升级验证。公开未验收部分只按本次已明确接受的边界处理，不把状态写成验收通过。不要复用旧验证产物、移动标签、强推或向 upstream 推送；报告真实提交、标签、六文件、检查和公开状态。
+
+## 9. 签名更新发行准备（2026-10-09 接入）
+
+开发源码已接入 [公开元数据与签名下载协议](updates.md)。以下流程用于后续新版本；不修改已公开的 0.2.25，也不把本次本地验证产物当作那个标签的附件。正式发行仍按前文的源码固定、桌面验收、授权范围、草稿检查和公开核验执行。
+
+### 密钥与构建
+
+受信任公钥在 `copy-creator/src-tauri/updater.pub`，key ID 为 `249F2915B7BBC0DC`。匹配私钥仅保存在发行环境，默认本机位置为 `%USERPROFILE%/.tauri/copy-creator-updater.key`；也可设置 `TAURI_SIGNING_PRIVATE_KEY_PATH` 或 CI secret `TAURI_SIGNING_PRIVATE_KEY`，密码由 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 提供。脚本不创建或替换密钥，私钥、密码不得进入仓库、文档、日志和发行文件。保留这次生成的密钥并在安全位置备份，丢失后旧客户端无法信任新密钥签名的包。
+
+从内层应用目录使用 PowerShell 7 和已锁定依赖：
+
+```powershell
+pnpm release:windows -NotesFile '<UTF-8 发行说明文件>' -Tag 'v<新基础版本>-baihejiangnan.1'
+```
+
+默认要求干净的已提交源码，package.json、Cargo.toml 与 Tauri 配置使用同一新基础版本；标签允许 `v<version>` 或基础版本相同的个人版正整数后缀。脚本运行类型检查、前端逻辑测试、完整 lint、Rust 单测与正式 Tauri MSI 构建，再从同次构建复制便携 EXE。它检查 MSI ProductVersion 和安装模式 registry component，但不会安装 MSI。
+
+脚本的当前环境合同：Windows x64 原生构建、PowerShell 7 的 `pwsh` 已在 PATH、pnpm/Node/Rust/MSVC 与 WindowsInstaller COM 可用；先 `pnpm install --frozen-lockfile`。不指定 Cargo target，不使用自定义 `CARGO_TARGET_DIR` / `CARGO_BUILD_TARGET` 或 `.cargo/config.toml` 的自定义 target-dir/build.target；脚本固定读取默认 target 路径及中文 x64 MSI 名，不能在这些设置存在时猜测或拿旧文件凑齐。若确需其他目标，先适配并验证脚本。独立验证器有自己的 Cargo.lock，其 package 版本 0.1.0 不随应用发布版本递增。
+
+NotesFile 使用绝对路径最清楚；准备在已提交文档位置或仓库外/忽略的发行准备目录，避免临时说明文件让干净源码检查失败。签名命令默认使用本机现有密钥，另一个 Agent 在此机器使用同一路径即可；新的检出不会自动带走私钥。构建期间不要修改源码或生成新的提交；保存脚本实际 exit code、sourceCommit 和输出目录，完工再次核对 HEAD 与构建 SHA、Git 状态。日志与溯源放在六文件目录外。
+
+干净构建目录须是能正确解析该仓库 HEAD 的 Git 检出（如独立 clone 或受管 worktree）。旧 0.2.25 曾从 Git archive 提取构建，但当前签名脚本会查询 Git 状态和 HEAD，不能直接在无 Git 元数据的 archive 导出目录运行。其他 Agent 仍在共享目录工作时从固定提交创建独立检出，不重置、清空或 stash 掉他们的未提交内容。
+
+`-AllowDirty` 仅用于本地实现验证：输出目录带 `validation-` 和唯一 ID，`validationOnly=true`，摘要中的 HEAD 不是未提交二进制的完整来源。不得给这些产物打正式标签、上传或宣称对应固定提交。后续提交最终源码后必须重新构建。当前脚本只准备产物，不执行 git 推送或 Release 创建。
+
+### 六个发行文件
+
+每次输出到根目录 `releases/<标签>-<唯一 ID>/`，准确包含：
+
+| 文件 | 用途 |
+| --- | --- |
+| `Copy-Creator-<version>-portable.exe` | 便携程序 |
+| `Copy-Creator-<version>-portable.exe.sig` | EXE 自身的 Tauri/minisign 签名 |
+| `Copy-Creator_<version>_x64.msi` | Windows x64 MSI |
+| `Copy-Creator_<version>_x64.msi.sig` | MSI 自身的签名 |
+| `latest.json` | UTF-8 无 BOM 元数据；基础版本、标签、纯文本说明、UTC 日期、两个平台各自的 URL/签名/实际大小 |
+| `SHA256SUMS.txt` | 前五个文件的 SHA-256 清单 |
+
+独立 `src-tauri/update-verifier/` 使用与客户端相同的流式验证源码和公钥。构建脚本验签两个最终文件，并对各自的一字节篡改副本确认拒绝；最后检查六文件清单、元数据、大小、签名和哈希。可单独复核本地目录：
+
+```powershell
+pwsh -NoProfile -File ../scripts/verify-update-release.ps1 -Directory '<六文件目录>' -Verifier './src-tauri/update-verifier/target/debug/copy-creator-update-verifier.exe'
+```
+
+### 发布与独立下载验收
+
+经过授权且满足相应发行门槛后，将六个文件上传同一个草稿 Release；标签绑定实际新基础版本构建 SHA，说明与 NotesFile 保持一致，核对后转公开正式 Latest。只有公开 Latest 才供客户端检查，不用它充当私有测试频道。
+
+发布后用匿名 HTTPS 从 `/releases/latest/download/latest.json` 下载元数据，并从其中的两个固定资产 URL 下载程序、各自 `.sig` 和 `SHA256SUMS.txt` 到独立核验目录。使用上面的验证命令核对下载副本，另确认 latest 对应实际标签。远端有文件或本地验签成功不能代替这一步；保留 CDN/代理错误与重试证据。
+
+独立核验目录只放这六个下载文件，不附带日志；从可信客户端源码构建验证器，不从待验证 Release 下载一个自称可信的验证器。只有 Release 发布/上传使用维护者的 gh 认证，公开下载不用 gh token、Authorization header 或客户端 Token。`$ErrorActionPreference` 不能保证原生程序失败即停止；pnpm/git/cargo/node/gh 与验证器每步检查 `$LASTEXITCODE`，失败停止依赖步骤。`verify-update-release.ps1` 是本地文件验证，不会下载、安装或核验远端状态。
+
+再用已有新客户端检查更高版本、下载/验签/显式升级，用新版检查自身不提示升级；分别验证便携旧进程退出/新进程快捷键可用和 MSI 自定义目录安装/升级/卸载标记。用合成数据库核对便签/设置保存失败与超时不启动。旧 0.2.25 仍使用 REST 检查，须先手动升级一次；旧 NSIS 与没有新标记的 MSI 先手动过渡，不宣称支持跨安装方式的自动迁移。
+
+本次本地结果及未执行的公开、安装与桌面联合范围见 [签名更新验证](../verification/2026-10-09-signed-updates.md)。

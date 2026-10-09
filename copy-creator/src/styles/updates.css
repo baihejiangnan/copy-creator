@@ -26,7 +26,9 @@
 .update-version { color: var(--accent); font-size: var(--text-base); font-variant-numeric: tabular-nums; }
 .update-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .update-buttons button:disabled, #auto-check-updates:disabled { opacity: 0.6; cursor: wait; }
-.update-status { margin: 10px 0 0; color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.6; }
+.update-status { margin: 10px 0 0; color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.6; overflow-wrap: anywhere; }
+.update-progress { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-size: var(--text-xs); color: var(--text-secondary); }
+.update-progress progress { width: 100%; accent-color: var(--accent); }
 .update-status.error { color: var(--danger); }
 .update-last-check, .update-setting-hint { margin: 8px 2px; color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.6; }
 .update-notes { margin-top: 12px; color: var(--text-secondary); font-size: var(--text-sm); }
@@ -43,6 +45,7 @@
   padding: 0;
   width: min(360px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   border: 1px solid var(--separator);
   border-radius: 18px;
   background: var(--bg-card);

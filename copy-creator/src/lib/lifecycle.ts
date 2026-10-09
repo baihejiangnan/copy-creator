@@ -92,5 +92,5 @@ export function startLifecycle() {
 export function lifecycleErrorKey(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && typeof error.code === "string") return error.code;
   const message = error instanceof Error ? error.message : String(error);
-  return /^(lifecycle|settings|notes)\.[A-Za-z]+$/.test(message) ? message : "lifecycle.failed";
+  return /^(lifecycle|settings|notes|updates)\.[A-Za-z]+$/.test(message) ? message : "lifecycle.failed";
 }

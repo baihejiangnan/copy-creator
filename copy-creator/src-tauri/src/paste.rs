@@ -82,6 +82,42 @@ fn write_private_clipboard_text(app: &AppHandle, text: &str) -> Result<u32, Stri
 #[cfg(target_os = "windows")]
 static LAST_FOREGROUND_TARGET: Mutex<Option<ForegroundTarget>> = Mutex::new(None);
 
+#[cfg(target_os = "windows")]
+fn process_is_elevated(process_id: u32) -> Option<bool> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    struct OwnedHandle(HANDLE);
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) { unsafe { let _ = CloseHandle(self.0); } }
+    }
+    unsafe {
+        let process = OwnedHandle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()?);
+        let mut token = HANDLE::default();
+        OpenProcessToken(process.0, TOKEN_QUERY, &mut token).ok()?;
+        let token = OwnedHandle(token);
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut returned = 0;
+        GetTokenInformation(token.0, TokenElevation,
+            Some((&mut elevation as *mut TOKEN_ELEVATION).cast()),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32, &mut returned).ok()?;
+        Some(elevation.TokenIsElevated != 0)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn elevation_blocks_paste(source: Option<bool>, target: Option<bool>) -> bool {
+    // Unknown token information does not prove a permission mismatch.
+    source == Some(false) && target == Some(true)
+}
+
+#[cfg(target_os = "windows")]
+fn target_requires_elevation(target: ForegroundTarget) -> bool {
+    elevation_blocks_paste(process_is_elevated(std::process::id()),
+        process_is_elevated(target.window_process))
+}
+
 // Keep the window, focused control and their owners together. A paste snapshots
 // this value once, so a later foreground event cannot redirect a credential.
 #[cfg(target_os = "windows")]
@@ -379,8 +415,15 @@ pub fn paste_sensitive_text(app: AppHandle, text: zeroize::Zeroizing<String>) ->
         let target = LAST_FOREGROUND_TARGET
             .lock()
             .map_err(|_| "vault.pasteNoTarget")?
-            .filter(|target| target.valid(true))
+            .filter(|target| target.valid(false))
             .ok_or("vault.pasteNoTarget")?;
+        // Refuse before copying credentials, hiding windows or sending input.
+        if target_requires_elevation(target) {
+            return Err("vault.pasteRequiresElevation".into());
+        }
+        if !target.valid(true) {
+            return Err("vault.pasteNoTarget".into());
+        }
         let window = app.get_webview_window("main").ok_or("vault.pasteFailed")?;
         let hide = !window.is_always_on_top().map_err(|_| "vault.pasteFailed")?;
         let mut enigo = Enigo::new(&Settings::default()).map_err(|_| "vault.pasteFailed")?;
@@ -452,6 +495,36 @@ mod private_paste_tests {
     use super::ForegroundTarget;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE};
+
+    #[test]
+    fn elevation_warning_requires_a_confirmed_mismatch() {
+        for source in [Some(false), Some(true), None] {
+            for target in [Some(false), Some(true), None] {
+                assert_eq!(super::elevation_blocks_paste(source, target),
+                    source == Some(false) && target == Some(true));
+            }
+        }
+    }
+
+    #[test]
+    fn native_token_query_accepts_self_and_rejects_missing_process() {
+        let own = super::process_is_elevated(std::process::id());
+        assert!(own.is_some());
+        assert!(!super::elevation_blocks_paste(own, own));
+        assert_eq!(super::process_is_elevated(0), None);
+    }
+
+    #[test]
+    #[ignore = "Requires an explicitly selected elevated process; reads tokens only, sends no input"]
+    fn confirmed_elevated_process_requires_warning() {
+        let process = std::env::var("COPY_CREATOR_TEST_ELEVATED_PID")
+            .expect("Select a known elevated test target PID").parse().unwrap();
+        assert_eq!(super::process_is_elevated(std::process::id()), Some(false));
+        assert_eq!(super::process_is_elevated(process), Some(true));
+        assert!(super::target_requires_elevation(ForegroundTarget {
+            window_process: process, ..Default::default()
+        }));
+    }
 
     struct HiddenTestWindow(HWND);
 
@@ -748,6 +821,10 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let target = LAST_FOREGROUND_TARGET.lock().map_err(|_| "clipboard.pasteFailed")?
         .filter(|target| target.valid(false)).ok_or("clipboard.pasteFailed")?;
+    #[cfg(target_os = "windows")]
+    if target_requires_elevation(target) {
+        return Err("clipboard.pasteRequiresElevation".into());
+    }
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
@@ -1218,9 +1295,13 @@ fn perform_action(app: &AppHandle, action: ClipboardAction, paste_after: bool) -
         }
     }
     if paste_after {
-        if paste_with_defocus(app).is_err() {
+        if let Err(error) = paste_with_defocus(app) {
             // The worker permit keeps the event tied to this storage identity.
             // Emit no target, clipboard contents or platform error details.
+            if error == "clipboard.pasteRequiresElevation" {
+                let _ = crate::storage_events::emit(app, "clipboard-paste-failed", "requiresElevation");
+                return Err(error);
+            }
             let _ = crate::storage_events::emit(app, "clipboard-paste-failed", true);
             return Err("clipboard.pasteFailed".into());
         }

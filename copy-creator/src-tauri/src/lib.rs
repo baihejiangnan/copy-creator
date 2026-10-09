@@ -10,6 +10,8 @@ mod vault;
 mod vault_crypto;
 mod backup;
 mod updates;
+mod update_package;
+mod update_signature;
 mod notes;
 mod lifecycle;
 mod storage;
@@ -209,6 +211,11 @@ fn toggle_always_on_top(app: tauri::AppHandle) -> Result<bool, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A verified portable successor waits before opening storage, registering
+    // shortcuts, or starting clipboard producers owned by its predecessor.
+    if update_package::wait_for_update_parent().is_err() {
+        return;
+    }
     let context = tauri::generate_context!();
     let autostart_name = autostart_entry_name(
         &context.package_info().name,
@@ -270,6 +277,7 @@ pub fn run() {
             db::init_db(app.handle())?;
             app.manage(vault::VaultState::default());
             app.manage(backup::BackupState::default());
+            app.manage(updates::UpdateState::default());
             app.manage(lifecycle::LifecycleState::default());
             db::enforce_clipboard_limits(app.handle()).ok();
 
@@ -344,6 +352,7 @@ pub fn run() {
             lifecycle::lifecycle_saved,
             lifecycle::lifecycle_cancel,
             lifecycle::request_app_restart,
+            lifecycle::request_app_elevated_restart,
             lifecycle::begin_storage_operation,
             lifecycle::end_storage_operation,
             db::change_storage_directory,
@@ -376,6 +385,8 @@ pub fn run() {
             clipboard::open_external_link,
             updates::get_app_info,
             updates::check_for_updates,
+            updates::download_update,
+            updates::launch_update,
             db::delete_clipboard_record,
             db::toggle_clipboard_favorite,
             db::set_clipboard_favorite_note,

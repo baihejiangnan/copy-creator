@@ -16,6 +16,7 @@ import { Icons } from "./components/Icons";
 import i18n from "./i18n";
 import { saveBarrier, startLifecycle } from "./lib/lifecycle";
 import LifecycleStatus from "./components/LifecycleStatus";
+import RestartAsAdminButton from "./components/RestartAsAdminButton";
 import { refreshWindowVisibility } from "./lib/documentVisible";
 import { invokeStorage, getStorageIdentity, isCurrentStorageIdentity, onStorageIdentity, type StorageEvent } from "./lib/storageIdentity";
 const NotesPage = React.lazy(() => import("./pages/NotesPage"));
@@ -49,7 +50,7 @@ function App() {
   const { themeMode, toggleTheme, loadSettings } = useSettingsStore();
   const [isPinned, setIsPinned] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [pasteFailed, setPasteFailed] = useState(false);
+  const [pasteFailed, setPasteFailed] = useState<"clipboard.pasteFailed" | "clipboard.pasteRequiresElevation" | null>(null);
   const updateAvailable = useUpdateStore((state) => state.result?.status === "available");
   const settingsSaveFailed = useSettingsEditorStore((state) => Object.keys(state.errors).length > 0);
   const markReadInFlightRef = useRef<Promise<void> | null>(null);
@@ -59,12 +60,12 @@ function App() {
     let version = 0;
     const clear = onStorageIdentity(() => {
       version++;
-      setPasteFailed(false);
+      setPasteFailed(null);
     });
-    const unlisten = listen<StorageEvent<boolean>>("clipboard-paste-failed", ({ payload }) => {
-      if (disposed || payload?.value !== true || !isCurrentStorageIdentity(payload.storage_epoch)) return;
+    const unlisten = listen<StorageEvent<boolean | "requiresElevation">>("clipboard-paste-failed", ({ payload }) => {
+      if (disposed || (payload?.value !== true && payload?.value !== "requiresElevation") || !isCurrentStorageIdentity(payload.storage_epoch)) return;
       const current = ++version;
-      setPasteFailed(true);
+      setPasteFailed(payload.value === "requiresElevation" ? "clipboard.pasteRequiresElevation" : "clipboard.pasteFailed");
       const main = getCurrentWindow();
       void main.show().then(() => {
         if (!disposed && current === version && isCurrentStorageIdentity(payload.storage_epoch)) return main.setFocus();
@@ -431,8 +432,11 @@ function App() {
     <VaultSession />
     <ClipboardLimitDialog />
     {pasteFailed && <div className="clipboard-paste-toast" role="alert">
-      <span>{t("clipboard.pasteFailed")}</span>
-      <button className="project-link" onClick={() => setPasteFailed(false)}>{t("common.close")}</button>
+      <span>{t(pasteFailed)}</span>
+      <div className="paste-actions">
+        {pasteFailed === "clipboard.pasteRequiresElevation" && <RestartAsAdminButton />}
+      <button className="project-link" onClick={() => setPasteFailed(null)}>{t("common.close")}</button>
+      </div>
     </div>}
     {settingsSaveFailed && !isSettingsPanel && <div className="settings-save-toast">
       <SettingsSaveStatus />

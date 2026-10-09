@@ -39,6 +39,7 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | [copy-creator/src-tauri/src/notes.rs](copy-creator/src-tauri/src/notes.rs)、[note_files.rs](copy-creator/src-tauri/src/note_files.rs) | 便签数据与原生文件引用操作 |
 | [copy-creator/src-tauri/src/note_search.rs](copy-creator/src-tauri/src/note_search.rs) | 便签/引用的派生候选索引、短词回退与有界查询 |
 | [copy-creator/src-tauri/src/lifecycle.rs](copy-creator/src-tauri/src/lifecycle.rs)、[storage.rs](copy-creator/src-tauri/src/storage.rs) | 生命周期交接、存储目录切换 |
+| [copy-creator/src-tauri/src/updates.rs](copy-creator/src-tauri/src/updates.rs)、[update_package.rs](copy-creator/src-tauri/src/update_package.rs)、[update_signature.rs](copy-creator/src-tauri/src/update_signature.rs) | 公开更新元数据、运行模式、签名下载和保存后升级；独立发行验证器复用原生验签代码 |
 | [copy-creator/src-tauri/src/backup.rs](copy-creator/src-tauri/src/backup.rs)、[note_backup.rs](copy-creator/src-tauri/src/note_backup.rs) | 加密备份、导入与便签恢复 |
 | [copy-creator/src-tauri/src/vault.rs](copy-creator/src-tauri/src/vault.rs)、[vault_crypto.rs](copy-creator/src-tauri/src/vault_crypto.rs) | 密码箱权限、会话与加密 |
 | [copy-creator/tests/](copy-creator/tests/) | 前端逻辑单元测试；Rust 测试位于原生源码中 |

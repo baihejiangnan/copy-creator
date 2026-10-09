@@ -13,6 +13,8 @@ const SAVE_DEADLINE: Duration = Duration::from_secs(15);
 enum Termination {
     Exit(i32),
     Restart,
+    ElevatedRestart,
+    Update,
 }
 struct Pending {
     id: String,
@@ -229,7 +231,7 @@ fn deliver(app: &AppHandle) -> Result<(), String> {
             pending.session.as_ref().map(|session| SaveRequest {
                 request_id: pending.id.clone(),
                 session_id: session.clone(),
-                purpose: if pending.kind == Termination::Restart {
+                purpose: if matches!(pending.kind, Termination::Restart | Termination::ElevatedRestart) {
                     "restart"
                 } else {
                     "exit"
@@ -251,6 +253,9 @@ fn show_failure(app: &AppHandle, code: &str) {
     }
 }
 fn request(app: &AppHandle, kind: Termination) -> Result<(), String> {
+    request_inner(app, kind, None)
+}
+fn request_inner(app: &AppHandle, kind: Termination, update: Option<crate::update_package::PreparedUpdate>) -> Result<(), String> {
     let state = app.state::<LifecycleState>();
     if state.is_paused() {
         return Err("lifecycle.busy".into());
@@ -260,6 +265,9 @@ fn request(app: &AppHandle, kind: Termination) -> Result<(), String> {
         .lock()
         .map_err(|_| "lifecycle.failed")?
         .request(kind)?;
+    if let Some(update) = update {
+        *app.state::<crate::updates::UpdateState>().armed.lock().map_err(|_| "updates.fileError")? = Some(update);
+    }
     if let Err(error) = deliver(app) {
         state
             .protocol
@@ -329,6 +337,7 @@ pub fn lifecycle_ready(
     deliver(&app)
 }
 async fn drain_backend(app: AppHandle) -> Result<(), String> {
+    crate::updates::cancel_and_drain(&app).await;
     // First wait for producers and save acceptance guards. Only then can all
     // accepted note permits be drained without racing a not-yet-enqueued save.
     let handle = app.clone();
@@ -438,6 +447,66 @@ pub fn request_app_restart(app: AppHandle, window: WebviewWindow) -> Result<(), 
     request(&app, Termination::Restart)
 }
 #[tauri::command]
+pub fn request_app_elevated_restart(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    main_only(&window)?;
+    #[cfg(target_os = "windows")]
+    { request(&app, Termination::ElevatedRestart) }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = app; Err("lifecycle.elevationUnsupported".into()) }
+}
+
+#[cfg(target_os = "windows")]
+fn launch_elevated_restart(app: &AppHandle) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::{
+        Foundation::CloseHandle,
+        System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
+        UI::{Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_NOCLOSEPROCESS, SEE_MASK_NOASYNC},
+            WindowsAndMessaging::SW_SHOWNORMAL},
+    };
+    let _dialog = crate::NativeDialogScope::new().ok_or("lifecycle.busy")?;
+    let window = app.get_webview_window("main").ok_or("lifecycle.elevationFailed")?;
+    let hwnd = window.hwnd().map_err(|_| "lifecycle.elevationFailed")?;
+    let executable = std::env::current_exe().map_err(|_| "lifecycle.elevationFailed")?;
+    let file: Vec<u16> = executable.as_os_str().encode_wide().chain(Some(0)).collect();
+    let directory: Vec<u16> = executable.parent().ok_or("lifecycle.elevationFailed")?
+        .as_os_str().encode_wide().chain(Some(0)).collect();
+    // The same binary waits for this predecessor before opening its database,
+    // starting clipboard producers or registering global shortcuts. No shell
+    // code, clipboard data or credential is passed in the command line.
+    let parameters: Vec<u16> = format!("--copy-creator-update-parent {}", std::process::id())
+        .encode_utf16().chain(Some(0)).collect();
+    struct ComScope;
+    impl Drop for ComScope { fn drop(&mut self) { unsafe { CoUninitialize(); } } }
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().map_err(|_| "lifecycle.elevationFailed")?;
+        let _com = ComScope;
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+            hwnd: windows::Win32::Foundation::HWND(hwnd.0),
+            lpVerb: w!("runas"), lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(parameters.as_ptr()), lpDirectory: PCWSTR(directory.as_ptr()),
+            nShow: SW_SHOWNORMAL.0, ..Default::default()
+        };
+        ShellExecuteExW(&mut info).map_err(|error| elevation_launch_error(error.code()))?;
+        if info.hProcess.is_invalid() { return Err("lifecycle.elevationFailed".into()); }
+        let _ = CloseHandle(info.hProcess);
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn elevation_launch_error(code: windows::core::HRESULT) -> String {
+    if code == windows::core::HRESULT::from_win32(windows::Win32::Foundation::ERROR_CANCELLED.0) {
+        "lifecycle.elevationCancelled".into()
+    } else { "lifecycle.elevationFailed".into() }
+}
+pub(crate) fn request_update(app: &AppHandle, prepared: crate::update_package::PreparedUpdate) -> Result<(), String> {
+    request_inner(app, Termination::Update, Some(prepared))
+}
+#[tauri::command]
 pub fn lifecycle_cancel(
     app: AppHandle,
     window: WebviewWindow,
@@ -479,13 +548,31 @@ pub async fn lifecycle_saved(
         .await
         .map_err(|_| "lifecycle.saveTimeout".to_string())
         .and_then(|result| result);
+    let drained = if drained.is_ok() && matches!(kind, Termination::Update | Termination::ElevatedRestart) {
+        // Save acceptance and backend drain precede executable verification
+        // and launch. Neither a failed save nor an expired request can install.
+        crate::vault::lock_and_notify(&app);
+        crate::paste::clear_sensitive_clipboard();
+        let launch_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if kind == Termination::Update { crate::update_package::launch_verified(&launch_app) }
+            else {
+                #[cfg(target_os = "windows")]
+                { launch_elevated_restart(&launch_app) }
+                #[cfg(not(target_os = "windows"))]
+                { Err("lifecycle.elevationUnsupported".into()) }
+            }
+        }).await.map_err(|_| if kind == Termination::Update { "updates.launchError" } else { "lifecycle.elevationFailed" }.to_string())
+            .and_then(|result| result)
+    } else { drained };
     let result = drained.and_then(|()| {
         log::debug!(target: "copy_creator::metrics", "operation=lifecycle stage=backend_drained");
         crate::vault::lock_and_notify(&app);
         crate::paste::clear_sensitive_clipboard();
         state.approved_exit.store(true, Ordering::SeqCst);
         match kind {
-            Termination::Exit(code) => {
+            Termination::Exit(_) | Termination::Update | Termination::ElevatedRestart => {
+                let code = if let Termination::Exit(code) = kind { code } else { 0 };
                 log::debug!(target: "copy_creator::metrics", "operation=lifecycle stage=request_exit");
                 #[cfg(target_os = "windows")]
                 {
@@ -566,6 +653,43 @@ pub fn hide_main_window(window: WebviewWindow) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn elevation_cancellation_is_distinct_from_launch_failure() {
+        use windows::core::HRESULT;
+        use windows::Win32::Foundation::{ERROR_CANCELLED, ERROR_ACCESS_DENIED};
+        assert_eq!(super::elevation_launch_error(HRESULT::from_win32(ERROR_CANCELLED.0)), "lifecycle.elevationCancelled");
+        assert_eq!(super::elevation_launch_error(HRESULT::from_win32(ERROR_ACCESS_DENIED.0)), "lifecycle.elevationFailed");
+    }
+
+    #[test]
+    fn elevated_restart_rejects_cancelled_expired_and_replaced_save_acknowledgements() {
+        let mut protocol = super::Protocol::default();
+        protocol.ready("old".into()).unwrap();
+        let id = protocol.request(super::Termination::ElevatedRestart).unwrap();
+        assert!(protocol.cancel(&id, "old"));
+        assert!(protocol.accept(&id, "old").is_err());
+        let id = protocol.request(super::Termination::ElevatedRestart).unwrap();
+        protocol.pending.as_mut().unwrap().started = std::time::Instant::now() - super::SAVE_DEADLINE;
+        assert!(protocol.accept(&id, "old").is_err());
+        assert!(protocol.ready("new".into()).unwrap());
+        assert!(protocol.accept(&id, "new").is_err());
+        let next = protocol.request(super::Termination::ElevatedRestart).unwrap();
+        assert_eq!(protocol.accept(&next, "new").unwrap(), super::Termination::ElevatedRestart);
+    }
+
+    #[test]
+    fn update_handoff_obeys_save_deadline_cancellation_and_session_replacement() {
+        let mut protocol = super::Protocol::default(); protocol.ready("old".into()).unwrap();
+        let id=protocol.request(super::Termination::Update).unwrap();
+        assert!(protocol.cancel(&id,"old"));assert!(protocol.accept(&id,"old").is_err());
+        let id=protocol.request(super::Termination::Update).unwrap();
+        protocol.pending.as_mut().unwrap().started=std::time::Instant::now()-super::SAVE_DEADLINE;
+        assert!(protocol.accept(&id,"old").is_err());
+        assert!(protocol.ready("new".into()).unwrap());assert!(protocol.accept(&id,"new").is_err());
+        let next=protocol.request(super::Termination::Update).unwrap();
+        assert_eq!(protocol.accept(&next,"new").unwrap(),super::Termination::Update);
+    }
     use super::*;
     #[test]
     fn ready_and_ack_are_bound_to_current_main_session_and_request() {

@@ -44,7 +44,7 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 ### Updates and About
 
 - About in the sidebar shows the project, installed version, license and repository links.
-- Settings → Updates and About share update checks, with an automatic startup check, release notes and a link to download updates from the release page. Downloads are installed manually.
+- Settings → Updates and About share update checks. Development source now supports public metadata, signed downloads and user-selected upgrades; public delivery and installation still need verification. The published 0.2.25 uses the previous update flow. See [update details](./docs/features/updates.md).
 
 ### 📋 Clipboard Manager
 - Automatically records text and image copy history
