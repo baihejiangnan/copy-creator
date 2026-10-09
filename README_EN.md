@@ -44,7 +44,7 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 ### Updates and About
 
 - About in the sidebar shows the project, installed version, license and repository links.
-- Settings → Updates and About share update checks. Development source now supports public metadata, signed downloads and user-selected upgrades; public delivery and installation still need verification. The published 0.2.25 uses the previous update flow. See [update details](./docs/features/updates.md).
+- Settings → Updates and About share update checks. Development source now supports public metadata, signed downloads and user-selected upgrades. 0.2.26 is publicly released with `latest.json` and signatures for both packages; anonymous download and signature verification of the public metadata passed, while real-desktop and installation/upgrade acceptance are still outstanding. See [update details](./docs/features/updates.md).
 
 ### 📋 Clipboard Manager
 - Automatically records text and image copy history
@@ -73,7 +73,7 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 - Copy or fill individual values. Select the target input, open the app with its shortcut, and click Fill to return and paste. Pin the window for repeated fills.
 - Lock after five idle minutes or when the window is hidden or minimized. Private copies bypass this app's history, opt out of Windows history / cloud clipboard, and are cleared after 30 seconds if still owned by the vault.
 
-Included in the 0.2.25 portable release. See the [website vault guide](./docs/features/website-vault.md) for storage details.
+Included in the 0.2.26 portable release. See the [website vault guide](./docs/features/website-vault.md) for storage details.
 
 ### 🔒 Local API Key Protection
 
@@ -101,13 +101,14 @@ Included in the 0.2.25 portable release. See the [website vault guide](./docs/fe
 
 ## Download
 
-0.2.25 is officially released with the user's explicit acceptance of known issues. Regular and tray paste may intermittently fail; memory targets and some joint acceptance checks remain unmet. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1) for backup requirements before upgrading, and the [0.2.25 release record](./docs/verification/2026-10-09-release-025.md) for verification limits.
+0.2.26 is officially released after the user's explicit acceptance of known issues and verification limits, shipping both a portable build and an MSI installer with signed metadata. Regular and tray paste may intermittently fail; memory targets and some joint acceptance checks remain unmet, and real-desktop plus installation/upgrade acceptance were not executed this round. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.26-baihejiangnan.1) for backup requirements before upgrading, and the [0.2.26 release record](./docs/verification/2026-10-09-release-026.md) for verification limits.
 
-Download the latest portable build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1):
+Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.26-baihejiangnan.1):
 
 | File | Description |
 |:---|:---|
-| [Copy-Creator-0.2.25-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.25-baihejiangnan.1/Copy-Creator-0.2.25-portable.exe) | Windows x64 portable executable, 46.39 MB; run without installation |
+| [Copy-Creator-0.2.26-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.26-baihejiangnan.1/Copy-Creator-0.2.26-portable.exe) | Windows x64 portable executable, 46.65 MB; run without installation |
+| [Copy-Creator_0.2.26_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.26-baihejiangnan.1/Copy-Creator_0.2.26_x64.msi) | Windows x64 installer, 34.03 MB; install location can be chosen |
 
 **System Requirements**: Windows 11
 
