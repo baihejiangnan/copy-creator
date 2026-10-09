@@ -103,14 +103,14 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 
 ## 下载
 
-0.2.26 已在用户明确接受已知问题与验证边界后正式发布，提供便携版与 MSI 安装版两个附件并附带签名元数据。普通/托盘粘贴仍可能偶发失败，内存及部分联合验收尚未达标，真实桌面与安装升级验收本轮未执行；详情和升级前备份要求见 [Release 说明](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.26-baihejiangnan.1)及 [0.2.26 发行记录](./docs/verification/2026-10-09-release-026.md)。
+0.2.27 已按用户要求公开为正式 Latest，用于测试从 0.2.26 内检查、下载并验证及升级。相较 0.2.26 仅提高应用版本号，提供便携版、MSI 和签名元数据。普通/托盘粘贴偶发失败、内存与桌面/安装升级验收缺口继续保留；用户真实升级结果待反馈。详情和备份要求见 [Release 说明](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.27-baihejiangnan.1)及 [0.2.27 测试发行记录](./docs/verification/2026-10-10-release-027.md)。
 
-前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.26-baihejiangnan.1) 下载最新版本：
+前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.27-baihejiangnan.1) 下载最新版本；运行 0.2.26 时可直接在应用内检查和下载：
 
 | 文件 | 说明 |
 |:---|:---|
-| [Copy-Creator-0.2.26-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.26-baihejiangnan.1/Copy-Creator-0.2.26-portable.exe) | Windows x64 便携版，46.65 MB，下载后直接运行，无需安装 |
-| [Copy-Creator_0.2.26_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.26-baihejiangnan.1/Copy-Creator_0.2.26_x64.msi) | Windows x64 安装版，34.03 MB，可选择安装目录 |
+| [Copy-Creator-0.2.27-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.27-baihejiangnan.1/Copy-Creator-0.2.27-portable.exe) | Windows x64 便携版，46.65 MB，下载后直接运行，无需安装 |
+| [Copy-Creator_0.2.27_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.27-baihejiangnan.1/Copy-Creator_0.2.27_x64.msi) | Windows x64 安装版，34.96 MB，可选择安装目录 |
 
 **系统要求**：Windows 11
 

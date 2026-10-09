@@ -101,14 +101,14 @@ Included in the 0.2.26 portable release. See the [website vault guide](./docs/fe
 
 ## Download
 
-0.2.26 is officially released after the user's explicit acceptance of known issues and verification limits, shipping both a portable build and an MSI installer with signed metadata. Regular and tray paste may intermittently fail; memory targets and some joint acceptance checks remain unmet, and real-desktop plus installation/upgrade acceptance were not executed this round. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.26-baihejiangnan.1) for backup requirements before upgrading, and the [0.2.26 release record](./docs/verification/2026-10-09-release-026.md) for verification limits.
+0.2.27 is published as the official Latest at the user's request to test checking, signed downloads and upgrading from 0.2.26 within the app. Only the application version changes; portable and MSI packages include signed metadata. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain; the user's actual upgrade result is pending. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.27-baihejiangnan.1) for backup requirements and the [0.2.27 test release record](./docs/verification/2026-10-10-release-027.md) for evidence and limits.
 
-Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.26-baihejiangnan.1):
+Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.27-baihejiangnan.1), or check and download within the app when running 0.2.26:
 
 | File | Description |
 |:---|:---|
-| [Copy-Creator-0.2.26-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.26-baihejiangnan.1/Copy-Creator-0.2.26-portable.exe) | Windows x64 portable executable, 46.65 MB; run without installation |
-| [Copy-Creator_0.2.26_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.26-baihejiangnan.1/Copy-Creator_0.2.26_x64.msi) | Windows x64 installer, 34.03 MB; install location can be chosen |
+| [Copy-Creator-0.2.27-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.27-baihejiangnan.1/Copy-Creator-0.2.27-portable.exe) | Windows x64 portable executable, 46.65 MB; run without installation |
+| [Copy-Creator_0.2.27_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.27-baihejiangnan.1/Copy-Creator_0.2.27_x64.msi) | Windows x64 installer, 34.96 MB; install location can be chosen |
 
 **System Requirements**: Windows 11
 
