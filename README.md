@@ -101,7 +101,9 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 | 本地存储 | SQLite (rusqlite, bundled) |
 | 国际化 | react-i18next（简体中文 / English） |
 
-## 下载安装
+## 下载
+
+0.2.25 源码已推送，便携 EXE 已上传为 Release 草稿，尚未公开。连续粘贴及部分性能验收仍有缺口，当前可下载正式版仍为下列 0.2.24。详情见 [0.2.25 发布记录](./docs/verification/2026-10-09-release-025.md)。安装
 
 前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.24-baihejiangnan.1) 下载最新便携版：
 

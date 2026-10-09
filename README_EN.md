@@ -101,6 +101,8 @@ Available in source; the existing v0.2.24 download does not include this feature
 
 ## Download
 
+The 0.2.25 source is pushed and its portable EXE is uploaded to a draft Release; it is not public yet. Intermittent paste failures and some performance acceptance gaps remain. The publicly available stable download is still 0.2.24 below. See the [0.2.25 release record](./docs/verification/2026-10-09-release-025.md).
+
 Download the latest portable build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.24-baihejiangnan.1):
 
 | File | Description |

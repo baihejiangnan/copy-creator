@@ -4,8 +4,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(__dirname,'../output/optimization/QA-notes-20261007'),wait=ms=>new Promise(r=>setTimeout(r,ms));
 (async()=>{
  const info=JSON.parse(fs.readFileSync(path.join(root,'process.json'),'utf8').replace(/^\uFEFF/,''));
- assert.equal(info.identifier,'com.copycreator.qa20261007');assert.ok(['native-release-image-idle','native-release-paste-settle','native-release-paste-feedback','native-release-version-025'].includes(info.nativeArtifact));assert.equal(info.profile,'release-default');assert.equal(crypto.createHash('sha256').update(fs.readFileSync(info.exe)).digest('hex'),info.sha256.toLowerCase());
- const expectedVersion=info.nativeArtifact==='native-release-version-025'?'0.2.25':'0.2.24';
+ assert.equal(info.identifier,'com.copycreator.qa20261007');assert.ok(['native-release-image-idle','native-release-paste-settle','native-release-paste-feedback','native-release-version-025','native-release-version-025-confirmed'].includes(info.nativeArtifact));assert.equal(info.profile,'release-default');assert.equal(crypto.createHash('sha256').update(fs.readFileSync(info.exe)).digest('hex'),info.sha256.toLowerCase());
+ const expectedVersion=['native-release-version-025','native-release-version-025-confirmed'].includes(info.nativeArtifact)?'0.2.25':'0.2.24';
  const browser=await chromium.connectOverCDP(process.env.QA_CDP_URL),page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url()==='http://tauri.localhost/');assert.ok(page);page.setDefaultTimeout(20000);
  const invoke=(command,args={})=>page.evaluate(({command,args})=>window.__TAURI_INTERNALS__.invoke(command,args),{command,args});
  assert.equal(require('./qa-path.cjs')(await invoke('get_storage_path')),require('./qa-path.cjs')(info.storageRoot));

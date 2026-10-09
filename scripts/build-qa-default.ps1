@@ -26,6 +26,9 @@ try {
  if(-not $pasteEntry.Contains('copy_creator_paste_instances') -or -not $pasteEntry.Contains('let mut dir = paste_image_directory(app);') -or -not $dbEntry.Contains('let paste_dir = crate::paste::paste_image_directory(app);')){throw 'QA requires identifier-isolated paste image writing and cleanup'}
  $nativeEntry=Get-Content -LiteralPath 'src-tauri/src/lib.rs' -Raw
  if(-not $nativeEntry.Contains('.app_name(autostart_name)') -or -not $nativeEntry.Contains('fn autostart_entry_name(')){throw 'Default QA requires identifier-isolated autostart registration'}
+ # Tauri rewrites this manifest to LF; freeze that representation beforehand.
+ $qaManifest=Join-Path $PWD 'src-tauri/Cargo.toml'
+ [IO.File]::WriteAllText($qaManifest,[IO.File]::ReadAllText($qaManifest).Replace("`r`n","`n"))
  $files=@(& rg --files src src-tauri package.json pnpm-lock.yaml vite.config.ts index.html radial.html)
  if($LASTEXITCODE -ne 0){throw 'Source inventory failed'}
  $hashes=@()

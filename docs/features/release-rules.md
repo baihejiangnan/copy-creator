@@ -73,7 +73,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 pnpm exec tauri build --no-bundle -- --locked
 ```
 
-本地 CLI 已确认支持 `--no-bundle` 和向 Cargo 传参；仍执行 `beforeBuildCommand` 中的 `pnpm build`，生成嵌入前端资源的生产 EXE。需要安装包时执行：
+本地 CLI 已确认支持 `--no-bundle` 和向 Cargo 传参；仍执行 `beforeBuildCommand` 中的 `pnpm build`，生成嵌入前端资源的生产 EXE。 2026-10-09 本机 pnpm 11.7.0 的 `exec` 剥离了上述 Cargo 分隔符，Tauri CLI 在编译前拒绝 `--locked`；实际成功采用等价的直接 CLI 调用 `node node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked --offline`。仍走 Tauri 构建及原前端钩子，不是直接 cargo 构建；其他 pnpm 版本先核对传参，保留失败日志。需要安装包时执行：
 
 ```powershell
 pnpm exec tauri build -- --locked
