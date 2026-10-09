@@ -1,3 +1,5 @@
+import { invokeStorage } from "../lib/storageIdentity";
+import "../styles/translation.css";
 import { useTranslation } from "react-i18next";
 import { useTranslationStore } from "../stores/translationStore";
 import { Icons } from "../components/Icons";
@@ -37,7 +39,7 @@ export default function TranslationPage() {
   const handleCopy = async () => {
     if (!result) return;
     try {
-      await navigator.clipboard.writeText(result);
+      await invokeStorage("copy_text", { text: result });
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {

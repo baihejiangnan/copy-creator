@@ -693,3 +693,35 @@
   color: var(--text-secondary);
   font-size: var(--text-base);
 }
+
+/* Keep all navigation and footer actions reachable in the supported minimum
+   window. The normal-height spacing is unchanged. */
+@media (max-height: 520px) {
+  .sidebar-header, .sidebar.collapsed .sidebar-header {
+    padding-top: 8px;
+    padding-bottom: 4px;
+    flex-shrink: 0;
+  }
+  .sidebar-nav, .sidebar.collapsed .sidebar-nav {
+    padding-top: 8px;
+    gap: 4px;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .sidebar-nav-item, .sidebar.collapsed .sidebar-nav-item {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    flex-shrink: 0;
+  }
+  .sidebar-footer, .sidebar.collapsed .sidebar-footer {
+    padding-top: 4px;
+    padding-bottom: 6px;
+    flex-shrink: 0;
+    top: 0;
+  }
+  .sidebar-footer-item, .sidebar.collapsed .sidebar-footer-item {
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+}

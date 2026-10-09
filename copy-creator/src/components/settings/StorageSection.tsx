@@ -1,30 +1,20 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { relaunch } from "@tauri-apps/plugin-process";
-import IosSelect from "../IosSelect";
+import { lifecycleErrorKey, withStorageOperation } from "../../lib/lifecycle";
 
 interface StorageSectionProps {
   storagePath: string;
   setStoragePath: (path: string) => void;
-  localRetention: string;
-  setLocalRetention: (retention: string) => void;
 }
 
 export function StorageSection({
   storagePath,
   setStoragePath,
-  localRetention,
-  setLocalRetention,
 }: StorageSectionProps) {
   const { t } = useTranslation();
   const [needRestart, setNeedRestart] = useState(false);
-
-  const retentionOptions = [
-    { value: "1week", label: t("settings.retention1week") },
-    { value: "1month", label: t("settings.retention1month") },
-    { value: "3months", label: t("settings.retention3months") },
-  ];
+  const [storageError, setStorageError] = useState("");
 
   return (
     <div className="settings-section">
@@ -37,12 +27,13 @@ export function StorageSection({
             <button
               className="settings-storage-btn"
               onClick={async () => {
+                setStorageError("");
                 try {
                   const folder = await invoke<string>("select_storage_folder");
-                  await invoke("set_setting", { key: "storage_path", value: folder });
+                  await withStorageOperation("storage", (operationToken) => invoke<number>("change_storage_directory", { operationToken, newPath: folder }));
                   setStoragePath(folder);
                   setNeedRestart(true);
-                } catch {}
+                } catch (error) { if (String(error) !== "cancelled") setStorageError(error instanceof Error ? lifecycleErrorKey(error) : String(error)); }
               }}
             >
               {t("settings.changeFolder")}
@@ -51,25 +42,18 @@ export function StorageSection({
           <div className="settings-storage-hint">
             {t("settings.storagePathHint")}
           </div>
+          {storageError && <p className="vault-error" role="alert">{t(storageError)}</p>}
           {needRestart && (
             <div className="settings-restart-hint">
               <span>{t("settings.restartHint")}</span>
               <button
                 className="settings-restart-btn"
-                onClick={() => relaunch()}
+                onClick={() => { void invoke("request_app_restart").catch((error) => setStorageError(String(error))); }}
               >
                 {t("settings.restartNow")}
               </button>
             </div>
           )}
-        </div>
-        <div className="settings-row">
-          <div className="settings-row-label">{t("settings.fileRetention")}</div>
-          <IosSelect
-            value={localRetention}
-            options={retentionOptions}
-            onChange={setLocalRetention}
-          />
         </div>
       </div>
     </div>

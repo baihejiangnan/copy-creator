@@ -1,0 +1,37 @@
+/* === Settings Page === */
+.settings-panel-content {
+  padding: 0;
+  height: 100%;
+}
+
+.settings-categorized {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.settings-category-body {
+  border: 0;
+  margin: 0;
+  min-inline-size: 0;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1px 2px 8px;
+  scrollbar-width: thin;
+}
+
+.settings-save-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; margin: 0 2px 12px; min-height: 18px; color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.6; }
+.settings-save-status.error, .settings-field-error { color: var(--danger); }
+.settings-field-error { font-size: var(--text-xs); line-height: 1.6; margin: 6px 12px 10px; }
+.settings-limit-dialog { margin: auto; padding: 20px; width: min(360px, calc(100vw - 32px)); border: 1px solid var(--separator); border-radius: 16px; background: #fff; color: var(--text-primary); box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
+.settings-limit-dialog::backdrop { background: rgba(0,0,0,0.35); backdrop-filter: blur(4px); }
+.settings-limit-dialog h3 { margin: 0 0 12px; font-size: var(--text-lg); }
+.settings-limit-dialog p { font-size: var(--text-sm); line-height: 1.8; }
+.settings-limit-dialog button:disabled { opacity: 0.6; cursor: wait; }
+[data-theme="dark"] .settings-limit-dialog { background: #1e1e20; }
+.settings-save-toast { position: fixed; bottom: 16px; left: 72px; right: 16px; z-index: 1100; padding: 12px 16px; border: 1px solid var(--separator); border-radius: 12px; background: var(--panel-bg); box-shadow: var(--shadow); }
+.settings-save-toast .settings-save-status { margin-bottom: 4px; }
+.clipboard-paste-toast { position: fixed; top: 56px; left: 72px; right: 16px; z-index: 1100; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border: 1px solid var(--separator); border-radius: 12px; background: var(--panel-bg); color: var(--text-primary); box-shadow: var(--shadow); }

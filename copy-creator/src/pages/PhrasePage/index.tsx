@@ -1,3 +1,4 @@
+import "../../styles/phrases.css";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { usePhraseStore } from "../../stores/phraseStore";
@@ -42,13 +43,13 @@ export default function PhrasePage() {
 
   useEffect(() => {
     init();
-  }, []);
+  }, [init]);
 
   useEffect(() => {
     if (selectedGroupId) {
       loadPhrases(selectedGroupId);
     }
-  }, [selectedGroupId]);
+  }, [selectedGroupId, loadPhrases]);
 
   const openNewGroup = () => {
     setEditingId(null);

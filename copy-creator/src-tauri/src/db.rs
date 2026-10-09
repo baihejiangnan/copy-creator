@@ -1,9 +1,9 @@
 use base64::Engine;
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 use chrono::TimeZone;
 
@@ -62,7 +62,7 @@ fn category_sql(category: &Option<String>) -> (String, String) {
         ),
         Some("apikey") => (
             "WHERE (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'dpapi:v1:%' OR content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
-            "AND (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
+            "AND (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'dpapi:v1:%' OR content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
         ),
         _ => ("".to_string(), "".to_string()),
     }
@@ -97,6 +97,24 @@ pub fn mark_toast_shown_internal(app: &AppHandle, key_preview: &str) {
 
 pub struct DbState {
     pub conn: Mutex<Connection>,
+    // Connection changes hold conn; event stamps may read under a lifecycle producer permit.
+    pub storage_epoch: AtomicU64,
+    pub asset_reclaim_cursor: Mutex<Option<(u64, String)>>,
+}
+
+// Hold a producer permit, accepted async operation, or the connection lock;
+// migration cannot change the connection/epoch until that guard is released.
+pub(crate) fn require_storage_epoch(app: &AppHandle, expected: Option<u64>) -> Result<(), String> {
+    if expected.is_some_and(|epoch| epoch != app.state::<DbState>().storage_epoch.load(Ordering::Relaxed)) {
+        return Err("notes.storageChanged".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_storage_epoch(state: tauri::State<'_, DbState>) -> Result<u64, String> {
+    let _conn = state.conn.lock().map_err(|e| e.to_string())?;
+    Ok(state.storage_epoch.load(Ordering::Relaxed))
 }
 
 fn migrate_secrets(conn: &mut Connection) -> Result<(), String> {
@@ -137,7 +155,7 @@ fn migrate_secrets(conn: &mut Connection) -> Result<(), String> {
 }
 
 const CLIPBOARD_CONTENT_PREVIEW_CHARS: usize = 600;
-const FAVORITE_NOTE_MAX_CHARS: usize = 200;
+pub(crate) const FAVORITE_NOTE_MAX_CHARS: usize = 200;
 
 fn make_content_preview(content: &str) -> (String, i64, bool) {
     let total_chars = content.chars().count();
@@ -247,22 +265,21 @@ fn db_path(app: &AppHandle) -> PathBuf {
 pub fn get_storage_dir(app: &AppHandle) -> PathBuf {
     let state = app.state::<DbState>();
     let conn = state.conn.lock().unwrap();
-    if let Ok(path) = conn.query_row(
-        "SELECT value FROM settings WHERE key = 'storage_path'",
-        [],
-        |row| row.get::<_, String>(0),
-    ) {
-        if !path.is_empty() {
-            let custom_dir = PathBuf::from(&path);
-            if custom_dir.exists() || std::fs::create_dir_all(&custom_dir).is_ok() {
-                return custom_dir;
-            }
-        }
-    }
-    drop(conn);
-    app.path()
+    get_storage_dir_for_connection(app, &conn)
+}
+
+pub(crate) fn get_storage_dir_for_connection(app: &AppHandle, conn: &Connection) -> PathBuf {
+    connection_storage_dir(conn).unwrap_or_else(|| app.path()
         .app_data_dir()
-        .expect("failed to get app data dir")
+        .expect("failed to get app data dir"))
+}
+
+fn connection_storage_dir(conn: &Connection) -> Option<PathBuf> {
+    // storage_path is a startup forwarding pointer. After a missing destination
+    // falls back to this database, assets must follow the actual open connection.
+    conn.path().filter(|path| !path.is_empty())
+        .and_then(|path| Path::new(path).parent())
+        .filter(|path| !path.as_os_str().is_empty()).map(Path::to_path_buf)
 }
 
 const DEFAULT_MAX_HISTORY_ITEMS: u64 = 2_000;
@@ -281,7 +298,7 @@ fn setting_u64(conn: &Connection, key: &str, default: u64) -> u64 {
     .unwrap_or(default)
 }
 
-fn storage_content_path(base_dir: &Path, content: &str) -> Option<PathBuf> {
+pub(crate) fn storage_content_path(base_dir: &Path, content: &str) -> Option<PathBuf> {
     let relative = Path::new(content);
     if relative.is_absolute()
         || relative.components().any(|component| {
@@ -298,22 +315,58 @@ fn storage_content_path(base_dir: &Path, content: &str) -> Option<PathBuf> {
     Some(base_dir.join(relative))
 }
 
-fn remove_stored_image(base_dir: &Path, content: &str) {
+static IMAGE_ACTIVITY: Mutex<()> = Mutex::new(());
+
+// Lock order: lifecycle producer, image activity, then the DB mutex. Capture
+// holds this until its reference is committed; reclamation rechecks afterwards.
+pub(crate) fn image_activity() -> std::sync::MutexGuard<'static, ()> {
+    IMAGE_ACTIVITY.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn remove_stored_image(base_dir: &Path, content: &str) -> bool {
+    let relative = Path::new(content);
+    if !relative.starts_with("images") { return true; }
     let Some(file_path) = storage_content_path(base_dir, content) else {
-        return;
+        return true;
     };
-    let _ = std::fs::remove_file(&file_path);
+    let remove = |path: &Path| match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    };
+    let original_removed = remove(&file_path);
+    let mut thumbnail_removed = true;
     if let Some(filename) = file_path.file_name() {
         let thumb_path = file_path
             .parent()
             .unwrap_or(base_dir)
             .join("thumbs")
             .join(filename);
-        let _ = std::fs::remove_file(thumb_path);
+        thumbnail_removed = remove(&thumb_path);
     }
+    original_removed && thumbnail_removed
 }
 
-fn stored_image_size(base_dir: &Path, content: &str) -> u64 {
+fn reclaim_image(conn: &mut Connection, base: &Path, content: &str) -> rusqlite::Result<bool> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let referenced: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM clipboard_records WHERE type='image' AND content=?1)", [content], |row| row.get(0))?;
+    let removed = !referenced && remove_stored_image(base, content);
+    if removed {
+        tx.execute("DELETE FROM clipboard_assets WHERE path=?1 AND ref_count=0", [content])?;
+    }
+    tx.commit()?;
+    Ok(removed)
+}
+
+fn reclaim_stored_image(app: &AppHandle, content: &str) -> Result<(), String> {
+    let _activity = image_activity();
+    let state = app.state::<DbState>();
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let base = get_storage_dir_for_connection(app, &conn);
+    reclaim_image(&mut conn, &base, content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn stored_image_size(base_dir: &Path, content: &str) -> u64 {
     let Some(file_path) = storage_content_path(base_dir, content) else {
         return 0;
     };
@@ -335,18 +388,35 @@ fn stored_image_size(base_dir: &Path, content: &str) -> u64 {
     size
 }
 
+// The caller holds an accepted lifecycle producer guard while modifying image
+// files. Metadata is measured outside the DB mutex and applied at the same epoch.
+pub(crate) fn refresh_image_asset(app: &AppHandle, content: &str) -> Result<(), String> {
+    let state = app.state::<DbState>();
+    let (base,epoch) = {
+        let conn=state.conn.lock().map_err(|e|e.to_string())?;
+        (get_storage_dir_for_connection(app,&conn),state.storage_epoch.load(Ordering::Relaxed))
+    };
+    let bytes=stored_image_size(&base,content);
+    let conn=state.conn.lock().map_err(|e|e.to_string())?;
+    if epoch!=state.storage_epoch.load(Ordering::Relaxed) {return Err("notes.storageChanged".into());}
+    crate::clipboard_usage::set_asset_size(&conn,content,bytes).map_err(|e|e.to_string())
+}
+
+#[cfg(test)]
 #[derive(Clone)]
 struct UsageRecord {
     id: String,
     record_type: String,
     content: String,
     is_favorite: bool,
+    protected_key: bool,
 }
 
+#[cfg(test)]
 fn load_usage_records(conn: &Connection) -> Result<Vec<UsageRecord>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, type, content, is_favorite FROM clipboard_records ORDER BY created_at ASC",
+            "SELECT id, type, content, is_favorite, (user_api_key = 1 OR content LIKE 'dpapi:v1:%' OR EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = clipboard_records.id)) FROM clipboard_records ORDER BY created_at ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -356,6 +426,7 @@ fn load_usage_records(conn: &Connection) -> Result<Vec<UsageRecord>, String> {
                 record_type: row.get(1)?,
                 content: row.get(2)?,
                 is_favorite: row.get::<_, i64>(3)? != 0,
+                protected_key: row.get::<_, i64>(4)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -363,6 +434,7 @@ fn load_usage_records(conn: &Connection) -> Result<Vec<UsageRecord>, String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
 fn usage_bytes(
     records: &[UsageRecord],
     base_dir: &Path,
@@ -386,86 +458,138 @@ fn usage_bytes(
     (total, image_refs, image_sizes)
 }
 
+#[cfg(test)]
+fn plan_limit_cleanup(records: &[UsageRecord], base_dir: &Path, max_items: u64, max_bytes: u64) -> (Vec<String>, Vec<String>) {
+    let mut count = records.len() as u64;
+    let (mut bytes, mut image_refs, image_sizes) = usage_bytes(records, base_dir);
+    let mut deleted_ids = Vec::new();
+    let mut orphaned_images = Vec::new();
+    for record in records.iter().filter(|record| !record.is_favorite && !record.protected_key) {
+        if count <= max_items && bytes <= max_bytes { break; }
+        count = count.saturating_sub(1);
+        bytes = bytes.saturating_sub(RECORD_OVERHEAD_BYTES);
+        if record.record_type == "image" {
+            if let Some(ref_count) = image_refs.get_mut(&record.content) {
+                *ref_count = ref_count.saturating_sub(1);
+                if *ref_count == 0 {
+                    bytes = bytes.saturating_sub(image_sizes.get(&record.content).copied().unwrap_or(0));
+                    orphaned_images.push(record.content.clone());
+                }
+            }
+        } else { bytes = bytes.saturating_sub(record.content.len() as u64); }
+        deleted_ids.push(record.id.clone());
+    }
+    (deleted_ids, orphaned_images)
+}
+
+fn plan_limit_cleanup_metadata(conn: &Connection, max_items: u64, max_bytes: u64) -> rusqlite::Result<(Vec<String>,Vec<String>)> {
+    let usage=crate::clipboard_usage::get(conn)?;
+    let (mut count,mut bytes)=(usage.records,usage.bytes);
+    let mut deleted=Vec::new();let mut orphaned=Vec::new();let mut image_refs=HashMap::new();
+    if count<=max_items && bytes<=max_bytes {return Ok((deleted,orphaned));}
+    let mut statement=conn.prepare("SELECT r.id,CASE WHEN r.type='image' THEN r.content END,
+        CASE WHEN r.type<>'image' THEN length(CAST(r.content AS BLOB)) ELSE 0 END,
+        COALESCE(a.ref_count,0),COALESCE(a.byte_size,0)
+        FROM clipboard_records r LEFT JOIN clipboard_assets a ON r.type='image' AND a.path=r.content
+        WHERE r.is_favorite=0 AND r.user_api_key=0 AND r.content NOT LIKE 'dpapi:v1:%'
+        AND NOT EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id=r.id)
+        ORDER BY r.created_at,r.id")?;
+    let mut rows=statement.query([])?;
+    while count>max_items || bytes>max_bytes {
+        let Some(row)=rows.next()? else {break;};
+        let id:String=row.get(0)?;let image:Option<String>=row.get(1)?;let text_bytes:u64=row.get(2)?;
+        count=count.saturating_sub(1);bytes=bytes.saturating_sub(RECORD_OVERHEAD_BYTES+text_bytes);
+        if let Some(path)=image {
+            let remaining=image_refs.entry(path.clone()).or_insert(row.get::<_,u64>(3)?);
+            *remaining=remaining.saturating_sub(1);
+            if *remaining==0 {bytes=bytes.saturating_sub(row.get::<_,u64>(4)?);orphaned.push(path);}
+        }
+        deleted.push(id);
+    }
+    Ok((deleted,orphaned))
+}
+
+fn persist_clipboard_limit(conn: &mut Connection, _base_dir: &Path, key: &str, value: &str, confirmed_count: Option<usize>) -> Result<(bool, Vec<String>, Vec<String>), String> {
+    let proposed = value.parse::<u64>().map_err(|_| "settings.invalidNumber")?;
+    let max_items = if key == "max_history_items" { proposed } else { setting_u64(conn, "max_history_items", DEFAULT_MAX_HISTORY_ITEMS) };
+    let max_mb = if key == "max_storage_mb" { proposed } else { setting_u64(conn, "max_storage_mb", DEFAULT_MAX_STORAGE_MB) };
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+    let (deleted_ids, orphaned_images) = plan_limit_cleanup_metadata(&tx,max_items,max_mb.saturating_mul(1024 * 1024)).map_err(|e|e.to_string())?;
+    // Recompute while holding the same database lock used for the commit.
+    // A changed cleanup count requires another confirmation before any write.
+    if !deleted_ids.is_empty() && confirmed_count != Some(deleted_ids.len()) {
+        return Ok((false, deleted_ids, orphaned_images));
+    }
+    tx.execute("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", params![key, value]).map_err(|e| e.to_string())?;
+    for id in &deleted_ids {
+        tx.execute("DELETE FROM api_key_labels WHERE record_id = ?1", [id]).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM clipboard_records WHERE id = ?1", [id]).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok((true, deleted_ids, orphaned_images))
+}
+
+#[tauri::command]
+pub fn save_clipboard_limit(app: AppHandle, key: String, value: String, confirmed_count: Option<usize>, expected_storage_epoch: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
+    if !matches!(key.as_str(), "max_history_items" | "max_storage_mb") || validate_import_setting(&key, &value).is_none() {
+        return Err("settings.invalidNumber".into());
+    }
+    let base_dir = get_storage_dir(&app);
+    let (saved, deleted_ids, orphaned_images) = {
+        let state = app.state::<DbState>();
+        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+        persist_clipboard_limit(&mut conn, &base_dir, &key, &value, confirmed_count)?
+    };
+    if !saved { return Ok(serde_json::json!({ "saved": false, "cleanup_count": deleted_ids.len() })); }
+    for content in orphaned_images { reclaim_stored_image(&app, &content)?; }
+    for id in &deleted_ids { let _ = crate::storage_events::emit(&app,"clipboard-deleted", id); }
+    crate::tray::schedule_tray_refresh(&app);
+    Ok(serde_json::json!({ "saved": true, "cleanup_count": deleted_ids.len() }))
+}
+
 pub fn enforce_clipboard_limits(app: &AppHandle) -> Result<usize, String> {
-    let base_dir = get_storage_dir(app);
-    let (deleted_ids, orphaned_images) = {
+    let mut total = 0;
+    loop {
+      let deleted = {
         let state = app.state::<DbState>();
         let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
         let max_items = setting_u64(&conn, "max_history_items", DEFAULT_MAX_HISTORY_ITEMS);
         let max_bytes = setting_u64(&conn, "max_storage_mb", DEFAULT_MAX_STORAGE_MB)
             .saturating_mul(1024 * 1024);
-        let records = load_usage_records(&conn)?;
-        let mut count = records.len() as u64;
-        let (mut bytes, mut image_refs, image_sizes) = usage_bytes(&records, &base_dir);
-        let mut deleted_ids = Vec::new();
-        let mut orphaned_images = Vec::new();
-
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        for record in records.iter().filter(|record| !record.is_favorite) {
-            if count <= max_items && bytes <= max_bytes {
-                break;
-            }
-
-            tx.execute(
-                "DELETE FROM api_key_labels WHERE record_id = ?1",
-                params![record.id],
-            )
-            .map_err(|e| e.to_string())?;
-            tx.execute(
-                "DELETE FROM clipboard_records WHERE id = ?1",
-                params![record.id],
-            )
-            .map_err(|e| e.to_string())?;
-
-            count = count.saturating_sub(1);
-            bytes = bytes.saturating_sub(RECORD_OVERHEAD_BYTES);
-            if record.record_type == "image" {
-                if let Some(ref_count) = image_refs.get_mut(&record.content) {
-                    *ref_count = ref_count.saturating_sub(1);
-                    if *ref_count == 0 {
-                        bytes = bytes
-                            .saturating_sub(image_sizes.get(&record.content).copied().unwrap_or(0));
-                        orphaned_images.push(record.content.clone());
-                    }
-                }
-            } else {
-                bytes = bytes.saturating_sub(record.content.len() as u64);
-            }
-            deleted_ids.push(record.id.clone());
-        }
-        tx.commit().map_err(|e| e.to_string())?;
-        (deleted_ids, orphaned_images)
-    };
-
-    for content in orphaned_images {
-        remove_stored_image(&base_dir, &content);
+        let usage=crate::clipboard_usage::get(&conn).map_err(|e|e.to_string())?;
+        if usage.records<=max_items && usage.bytes<=max_bytes {return Ok(total);}
+        crate::clipboard_usage::cleanup_batch(&mut conn,max_items,max_bytes).map_err(|e|e.to_string())?
+      };
+      if deleted.is_empty() { return Ok(total); } // Protected records can exceed the limit.
+      total += deleted.len();
+      for (id, image) in deleted {
+        if let Some(content) = image { reclaim_stored_image(app, &content)?; }
+        let _ = crate::storage_events::emit(&app,"clipboard-deleted", &id);
+      }
+      std::thread::yield_now();
     }
-    for id in &deleted_ids {
-        let _ = app.emit("clipboard-deleted", id);
-    }
-
-    Ok(deleted_ids.len())
 }
 
 #[tauri::command]
 pub fn get_clipboard_storage_stats(app: AppHandle) -> Result<serde_json::Value, String> {
-    let base_dir = get_storage_dir(&app);
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let records = load_usage_records(&conn)?;
-    let (bytes, _, _) = usage_bytes(&records, &base_dir);
-    let favorite_count = records.iter().filter(|record| record.is_favorite).count();
+    let usage=crate::clipboard_usage::get(&conn).map_err(|e|e.to_string())?;
     let max_items = setting_u64(&conn, "max_history_items", DEFAULT_MAX_HISTORY_ITEMS);
     let max_storage_mb = setting_u64(&conn, "max_storage_mb", DEFAULT_MAX_STORAGE_MB);
 
     Ok(serde_json::json!({
-        "record_count": records.len(),
-        "favorite_count": favorite_count,
-        "usage_bytes": bytes,
+        "record_count": usage.records,
+        "favorite_count": usage.favorites,
+        "usage_bytes": usage.bytes,
         "max_history_items": max_items,
         "max_storage_bytes": max_storage_mb.saturating_mul(1024 * 1024),
-        "over_limit": records.len() as u64 > max_items
-            || bytes > max_storage_mb.saturating_mul(1024 * 1024),
+        "over_limit": usage.records > max_items
+            || usage.bytes > max_storage_mb.saturating_mul(1024 * 1024),
     }))
 }
 
@@ -531,14 +655,57 @@ fn migrate_explorer_addresses(conn: &Connection) -> rusqlite::Result<usize> {
     Ok(migrated)
 }
 
-pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let path = db_path(app);
-    let mut conn = Connection::open(&path)?;
+/// The same connection contract is used for startup and storage destinations.
+/// FULL syncs each WAL commit before acknowledging saved data. This relies on
+/// the filesystem/device honoring sync; it is not a substitute for backups.
+pub(crate) fn initialize_connection(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > 5 {
+        return Err("database schema is newer than this application".into());
+    }
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let journal: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+    // SQLite can return a different mode without treating it as an error.
+    // In-memory fixtures use 'memory'; persistent connections must use WAL.
+    if journal != "wal" && journal != "memory" {
+        return Err("storage.walUnavailable".into());
+    }
+    conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-8000; PRAGMA foreign_keys=ON;")?;
+    if version < 1 {
+        let tx = conn.transaction()?;
+        initialize_schema_v1(&tx)?;
+        tx.execute_batch("PRAGMA user_version=1;")?;
+        tx.commit()?;
+    }
+    if version < 2 {
+        let tx = conn.transaction()?;
+        crate::notes::init_schema(&tx)?;
+        tx.execute_batch("PRAGMA user_version=2;")?;
+        tx.commit()?;
+    }
+    if version < 3 {
+        let tx = conn.transaction()?;
+        crate::note_backup::init_schema(&tx)?;
+        tx.execute_batch("PRAGMA user_version=3;")?;
+        tx.commit()?;
+    }
+    if version < 4 {
+        let tx = conn.transaction()?;
+        crate::clipboard_usage::init_schema(&tx)?;
+        tx.execute_batch("PRAGMA user_version=4;")?;
+        tx.commit()?;
+    }
+    if version < 5 {
+        let tx = conn.transaction()?;
+        crate::note_search::init_schema(&tx)?;
+        tx.execute_batch("PRAGMA user_version=5;")?;
+        tx.commit()?;
+    }
+    migrate_secrets(conn)?;
+    Ok(())
+}
 
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8000;",
-    )?;
-
+fn initialize_schema_v1(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS clipboard_records (
@@ -608,6 +775,7 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         INSERT OR IGNORE INTO settings (key, value) VALUES ('image_compression_quality', '90');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('large_image_handling', 'compress');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('clipboard_notifications', '0');
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_check_updates', '1');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('clipboard_unread_count', '0');
 
         UPDATE settings SET value = 'google' WHERE key = 'default_translate_engine' AND value = 'builtin';
@@ -671,17 +839,23 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Runtime migrations for existing databases
-    migrate_clipboard_record_schema(&conn)?;
+    migrate_clipboard_record_schema(conn)?;
     conn.execute(
         "INSERT OR IGNORE INTO api_services (name, api_base) SELECT service, api_base FROM api_key_labels WHERE service <> '' ORDER BY updated_at DESC",
         [],
     )?;
-    migrate_secrets(&mut conn)?;
+    crate::vault::init_schema(conn)?;
+    Ok(())
+}
 
+pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let mut conn = Connection::open(db_path(app))?;
+    initialize_connection(&mut conn)?;
     app.manage(DbState {
         conn: Mutex::new(conn),
+        storage_epoch: AtomicU64::new(1),
+        asset_reclaim_cursor: Mutex::new(None),
     });
-
     Ok(())
 }
 
@@ -705,14 +879,36 @@ fn collect_unreferenced_image_contents(
         .collect())
 }
 
-pub fn prune_old_records(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let days;
-    let image_contents: Vec<String>;
-    let deleted_ids: Vec<String>;
+fn prune_expired_records(conn: &Connection, days: i64) -> rusqlite::Result<Vec<(String, String, String)>> {
+    let tx = conn.unchecked_transaction()?;
+    let records = {
+        let mut stmt = tx.prepare("SELECT id, type, CASE WHEN type='image' THEN content ELSE '' END FROM clipboard_records WHERE is_favorite = 0
+            AND user_api_key = 0 AND content NOT LIKE 'dpapi:v1:%'
+            AND NOT EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = clipboard_records.id)
+            AND datetime(created_at) < datetime('now', ?1) ORDER BY created_at,id LIMIT 100")?;
+        let rows = stmt.query_map(params![format!("-{days} days")], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (id, _, _) in &records {
+        tx.execute("DELETE FROM clipboard_records WHERE id = ?1", [id])?;
+    }
+    tx.commit()?;
+    Ok(records)
+}
 
-    {
+pub fn prune_old_records(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    prune_records(app, false).map(|_| ())
+}
+pub(crate) fn prune_old_records_background(app: &AppHandle) -> Result<bool, Box<dyn std::error::Error>> {
+    prune_records(app, true)
+}
+fn prune_records(app: &AppHandle, background: bool) -> Result<bool, Box<dyn std::error::Error>> {
+    if background && crate::notes::writes_pending() { return Ok(false); }
+    let days = {
         let state = app.state::<DbState>();
-        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let conn = if background {
+            match state.conn.try_lock() { Ok(conn) => conn, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("database lock failed".into()) }
+        } else { state.conn.lock().map_err(|e| e.to_string())? };
 
         let retention: String = conn
             .query_row(
@@ -722,64 +918,55 @@ pub fn prune_old_records(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
             )
             .unwrap_or_else(|_| "1month".to_string());
 
-        days = match retention.as_str() {
+        match retention.as_str() {
             "1week" => 7,
             "3months" => 90,
             _ => 30,
+        }
+    };
+    loop {
+        let records = {
+            let state = app.state::<DbState>();
+            if background && crate::notes::writes_pending() { return Ok(false); }
+            let waiting = std::time::Instant::now();
+            let mut conn = if background {
+                match state.conn.try_lock() { Ok(conn) => conn, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("database lock failed".into()) }
+            } else { state.conn.lock().map_err(|e| e.to_string())? };
+            let lock_wait_us = waiting.elapsed().as_micros();
+            if background && crate::notes::writes_pending() { return Ok(false); }
+            let executing = std::time::Instant::now();
+            let (result, sql) = crate::db_metrics::measure(&mut conn, |conn| prune_expired_records(conn, days));
+            let held_us = executing.elapsed().as_micros();
+            drop(conn);
+            if let Some(metrics) = sql {
+                log::debug!(target: "copy_creator::metrics", "cleanup operation=clipboard_ttl ok={} queued_us=0 lock_wait_us={lock_wait_us} held_us={held_us} sql_count={} sql_profile_ms={}", result.is_ok(), metrics.statements, metrics.elapsed_ms);
+            }
+            result?
         };
-
-        // Collect records before deletion for UI and image-file cleanup.
-        {
-            let mut stmt = conn.prepare(
-                "SELECT id, type, content FROM clipboard_records WHERE is_favorite = 0 AND datetime(created_at) < datetime('now', ?1)",
-            )?;
-            let rows = stmt.query_map(params![format!("-{} days", days)], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
-            let records: Vec<(String, String, String)> = rows.filter_map(Result::ok).collect();
-            deleted_ids = records.iter().map(|record| record.0.clone()).collect();
-            image_contents = records
-                .into_iter()
-                .filter_map(|(_, record_type, content)| (record_type == "image").then_some(content))
-                .collect();
+        let count = records.len();
+        for (id, kind, content) in records {
+            if kind == "image" { reclaim_stored_image(app, &content)?; }
+            let _ = crate::storage_events::emit(&app,"clipboard-deleted", id);
         }
-
-        conn.execute(
-            "DELETE FROM api_key_labels WHERE record_id IN (
-                SELECT id FROM clipboard_records WHERE is_favorite = 0 AND datetime(created_at) < datetime('now', ?1)
-            )",
-            params![format!("-{} days", days)],
-        )?;
-        conn.execute(
-            "DELETE FROM clipboard_records WHERE is_favorite = 0 AND datetime(created_at) < datetime('now', ?1)",
-            params![format!("-{} days", days)],
-        )?;
+        if count < 100 { break; }
+        if background { return Ok(false); }
+        std::thread::yield_now();
     }
-
-    // Clean up image files and thumbnails only if no remaining records reference them.
-    // Content-hash filenames mean multiple records can share the same file on disk.
-    let base_dir = get_storage_dir(app);
-    let state = app.state::<DbState>();
-    let unreferenced_images = collect_unreferenced_image_contents(&state, &image_contents)?;
-    for content in unreferenced_images {
-        let file_path = base_dir.join(&content);
-        let _ = std::fs::remove_file(&file_path);
-        if let Some(filename) = file_path.file_name() {
-            let thumb_path = file_path
-                .parent()
-                .unwrap_or(&base_dir)
-                .join("thumbs")
-                .join(filename);
-            let _ = std::fs::remove_file(&thumb_path);
-        }
-    }
+    // Failed unlinks leave zero-reference entries for bounded retry next time.
+    let pending = {
+        let state = app.state::<DbState>();
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        let epoch = state.storage_epoch.load(Ordering::Relaxed);
+        let mut cursor = state.asset_reclaim_cursor.lock().map_err(|e| e.to_string())?;
+        let after = cursor.as_ref().filter(|(stored, _)| *stored == epoch).map(|(_, path)| path.as_str());
+        let rows = crate::clipboard_usage::reclaim_candidates(&conn, after)?;
+        *cursor = rows.last().map(|path| (epoch, path.clone()));
+        rows
+    };
+    for content in pending { reclaim_stored_image(app, &content)?; }
 
     // Clean up temp paste image files older than retention period
-    let paste_dir = std::env::temp_dir().join("copy_creator_paste");
+    let paste_dir = crate::paste::paste_image_directory(app);
     if let Ok(entries) = std::fs::read_dir(&paste_dir) {
         let cutoff =
             std::time::SystemTime::now() - std::time::Duration::from_secs(days as u64 * 86400);
@@ -792,73 +979,50 @@ pub fn prune_old_records(app: &AppHandle) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    for id in deleted_ids {
-        let _ = app.emit("clipboard-deleted", id);
-    }
     // Tray refresh reads settings, so no database guard may be alive here.
     crate::tray::refresh_tray_menu(app).ok();
 
-    Ok(())
+    Ok(true)
 }
 
 // ---- Tauri Commands ----
 
-#[tauri::command]
+#[derive(serde::Deserialize)]
+pub struct ClipboardCursor { created_at: String, id: String }
+
+#[tauri::command(async)]
 pub fn get_clipboard_records(
     app: AppHandle,
     search: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
     category: Option<String>,
+    cursor: Option<ClipboardCursor>,
+    expected_storage_epoch: Option<u64>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let lim = limit.unwrap_or(200);
-    let off = offset.unwrap_or(0);
+    if expected_storage_epoch.is_some_and(|epoch|epoch!=state.storage_epoch.load(Ordering::Relaxed)) {return Err("notes.storageChanged".into());}
+    query_clipboard_records(&conn,search,limit,offset,category,cursor)
+}
 
-    let cat_filter = category_sql(&category);
-
-    let mut records: Vec<serde_json::Value> = Vec::new();
-
-    if let Some(q) = search {
-        let escaped = q
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let sql = format!(
-            "SELECT id, type, content, source_app, created_at, user_api_key, is_favorite, favorite_note FROM clipboard_records
-             WHERE (content LIKE '%' || ?1 || '%' ESCAPE '\\' OR favorite_note LIKE '%' || ?1 || '%' ESCAPE '\\') {} ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
-            cat_filter.1
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![escaped, lim, off], clipboard_record_json)
-            .map_err(|e| e.to_string())?;
-        for row in rows {
-            records.push(row.map_err(|e| e.to_string())?);
-        }
-    } else {
-        let sql = format!(
-            "SELECT id, type, content, source_app, created_at, user_api_key, is_favorite, favorite_note FROM clipboard_records
-             {} ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
-            cat_filter.0
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![lim, off], clipboard_record_json)
-            .map_err(|e| e.to_string())?;
-        for row in rows {
-            records.push(row.map_err(|e| e.to_string())?);
-        }
-    }
+fn query_clipboard_records(conn:&Connection,search:Option<String>,limit:Option<u32>,offset:Option<u32>,category:Option<String>,cursor:Option<ClipboardCursor>) -> Result<Vec<serde_json::Value>,String> {
+    let lim = limit.unwrap_or(200).clamp(1,200);
+    let off = if cursor.is_some() {0} else {offset.unwrap_or(0)};
+    let category_filter=category_sql(&category).1;
+    let search=search.filter(|q|!q.is_empty()).map(|q|q.replace('\\',"\\\\").replace('%',"\\%").replace('_',"\\_"));
+    let sql=format!("SELECT id,type,content,source_app,created_at,user_api_key,is_favorite,favorite_note FROM clipboard_records WHERE (?1 IS NULL OR content LIKE '%'||?1||'%' ESCAPE '\\' OR favorite_note LIKE '%'||?1||'%' ESCAPE '\\') {category_filter} AND (?2 IS NULL OR created_at<?2 OR (created_at=?2 AND id<?3)) ORDER BY created_at DESC,id DESC LIMIT ?4 OFFSET ?5");
+    let mut stmt=conn.prepare(&sql).map_err(|e|e.to_string())?;
+    let rows=stmt.query_map(params![search,cursor.as_ref().map(|c|&c.created_at),cursor.as_ref().map(|c|&c.id),lim,off],clipboard_record_json).map_err(|e|e.to_string())?;
+    let records:Vec<serde_json::Value>=rows.collect::<rusqlite::Result<_>>().map_err(|e|e.to_string())?;
 
     // Build label map for API key enrichment
     let mut label_map: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
     if let Ok(mut stmt) =
-        conn.prepare("SELECT record_id, service, api_base, note, is_expired FROM api_key_labels")
+        conn.prepare(&format!("SELECT record_id,service,api_base,note,is_expired FROM api_key_labels WHERE record_id IN ({})", (0..records.len()).map(|_|"?").collect::<Vec<_>>().join(",")))
     {
-        if let Ok(rows) = stmt.query_map([], |row| {
+        if let Ok(rows) = stmt.query_map(rusqlite::params_from_iter(records.iter().map(|r|r["id"].as_str().unwrap_or(""))), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -925,9 +1089,10 @@ pub fn get_clipboard_records(
 }
 
 #[tauri::command]
-pub fn get_clipboard_record_content(app: AppHandle, id: String) -> Result<String, String> {
+pub fn get_clipboard_record_content(app: AppHandle, id: String, expected_storage_epoch: Option<u64>) -> Result<String, String> {
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    if expected_storage_epoch.is_some_and(|epoch|epoch!=state.storage_epoch.load(Ordering::Relaxed)) {return Err("notes.storageChanged".into());}
     let content: String = conn.query_row(
         "SELECT content FROM clipboard_records WHERE id = ?1",
         params![id],
@@ -975,7 +1140,7 @@ pub fn get_clipboard_action_record(
 pub fn get_recent_clipboard_records(
     app: &AppHandle,
     limit: u32,
-) -> Result<Vec<ClipboardActionRecord>, String> {
+) -> Result<(u64, Vec<ClipboardActionRecord>), String> {
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
@@ -1000,11 +1165,15 @@ pub fn get_recent_clipboard_records(
     for record in &mut records {
         record.content = crate::secrets::reveal(&record.content)?;
     }
-    Ok(records)
+    Ok((state.storage_epoch.load(Ordering::Relaxed), records))
 }
 
 #[tauri::command]
-pub fn toggle_clipboard_favorite(app: AppHandle, id: String) -> Result<bool, String> {
+pub fn toggle_clipboard_favorite(app: AppHandle, id: String, expected_storage_epoch: Option<u64>,
+) -> Result<bool, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let is_favorite = {
         let state = app.state::<DbState>();
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
@@ -1024,7 +1193,7 @@ pub fn toggle_clipboard_favorite(app: AppHandle, id: String) -> Result<bool, Str
         next
     };
 
-    let _ = app.emit(
+    let _ = crate::storage_events::emit(&app,
         "clipboard-favorite-changed",
         serde_json::json!({ "id": id, "is_favorite": is_favorite }),
     );
@@ -1046,8 +1215,11 @@ fn normalize_favorite_note(note: &str) -> Result<String, String> {
 pub fn set_clipboard_favorite_note(
     app: AppHandle,
     id: String,
-    note: String,
+    note: String, expected_storage_epoch: Option<u64>,
 ) -> Result<String, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let favorite_note = normalize_favorite_note(&note)?;
     let updated = {
         let state = app.state::<DbState>();
@@ -1062,7 +1234,7 @@ pub fn set_clipboard_favorite_note(
         return Err("favorite clipboard record not found".to_string());
     }
 
-    let _ = app.emit(
+    let _ = crate::storage_events::emit(&app,
         "clipboard-favorite-note-changed",
         serde_json::json!({ "id": id, "favorite_note": favorite_note }),
     );
@@ -1110,7 +1282,7 @@ pub fn increment_unread_if_hidden(app: &AppHandle) -> i64 {
         );
         next
     };
-    let _ = app.emit("clipboard-unread-changed", count);
+    let _ = crate::storage_events::emit(&app,"clipboard-unread-changed", count);
     count
 }
 
@@ -1123,7 +1295,11 @@ pub fn get_clipboard_unread_count(app: AppHandle) -> i64 {
 }
 
 #[tauri::command(async)]
-pub fn mark_clipboard_read(app: AppHandle) -> Result<(), String> {
+pub fn mark_clipboard_read(app: AppHandle, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let changed = {
         let state = app.state::<DbState>();
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
@@ -1136,13 +1312,17 @@ pub fn mark_clipboard_read(app: AppHandle) -> Result<(), String> {
     if changed == 0 {
         return Ok(());
     }
-    let _ = app.emit("clipboard-unread-changed", 0);
+    let _ = crate::storage_events::emit(&app,"clipboard-unread-changed", 0);
     crate::tray::schedule_tray_refresh(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub fn delete_clipboard_record(app: AppHandle, id: String) -> Result<(), String> {
+pub fn delete_clipboard_record(app: AppHandle, id: String, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let image_content: Option<String> = {
         let state = app.state::<DbState>();
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
@@ -1163,7 +1343,7 @@ pub fn delete_clipboard_record(app: AppHandle, id: String) -> Result<(), String>
         conn.execute("DELETE FROM clipboard_records WHERE id = ?1", params![&id])
             .map_err(|e| e.to_string())?;
 
-        let _ = app.emit("clipboard-deleted", &id);
+        let _ = crate::storage_events::emit(&app,"clipboard-deleted", &id);
 
         match record {
             Some((t, c)) if t == "image" => {
@@ -1181,7 +1361,7 @@ pub fn delete_clipboard_record(app: AppHandle, id: String) -> Result<(), String>
     };
 
     if let Some(content) = image_content {
-        remove_stored_image(&get_storage_dir(&app), &content);
+        reclaim_stored_image(&app, &content)?;
     }
 
     crate::tray::schedule_tray_refresh(&app);
@@ -1215,7 +1395,11 @@ pub fn get_phrase_groups(app: AppHandle) -> Result<Vec<serde_json::Value>, Strin
 }
 
 #[tauri::command]
-pub fn create_phrase_group(app: AppHandle, name: String) -> Result<serde_json::Value, String> {
+pub fn create_phrase_group(app: AppHandle, name: String, expected_storage_epoch: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -1225,7 +1409,7 @@ pub fn create_phrase_group(app: AppHandle, name: String) -> Result<serde_json::V
         params![id, name, &now, &now],
     )
     .map_err(|e| e.to_string())?;
-    let _ = app.emit("phrase-groups-changed", ());
+    let _ = crate::storage_events::emit(&app,"phrase-groups-changed", ());
     Ok(serde_json::json!({
         "id": id,
         "name": name,
@@ -1236,7 +1420,11 @@ pub fn create_phrase_group(app: AppHandle, name: String) -> Result<serde_json::V
 }
 
 #[tauri::command]
-pub fn update_phrase_group(app: AppHandle, id: String, name: String) -> Result<(), String> {
+pub fn update_phrase_group(app: AppHandle, id: String, name: String, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -1245,19 +1433,23 @@ pub fn update_phrase_group(app: AppHandle, id: String, name: String) -> Result<(
         params![name, &now, id],
     )
     .map_err(|e| e.to_string())?;
-    let _ = app.emit("phrase-groups-changed", ());
+    let _ = crate::storage_events::emit(&app,"phrase-groups-changed", ());
     Ok(())
 }
 
 #[tauri::command]
-pub fn delete_phrase_group(app: AppHandle, id: String) -> Result<(), String> {
+pub fn delete_phrase_group(app: AppHandle, id: String, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM phrases WHERE group_id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM phrase_groups WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
-    let _ = app.emit("phrase-groups-changed", ());
+    let _ = crate::storage_events::emit(&app,"phrase-groups-changed", ());
     Ok(())
 }
 
@@ -1293,8 +1485,11 @@ pub fn create_phrase(
     app: AppHandle,
     group_id: String,
     title: String,
-    content: String,
+    content: String, expected_storage_epoch: Option<u64>,
 ) -> Result<serde_json::Value, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -1320,8 +1515,11 @@ pub fn update_phrase(
     app: AppHandle,
     id: String,
     title: String,
-    content: String,
+    content: String, expected_storage_epoch: Option<u64>,
 ) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -1334,7 +1532,11 @@ pub fn update_phrase(
 }
 
 #[tauri::command]
-pub fn delete_phrase(app: AppHandle, id: String) -> Result<(), String> {
+pub fn delete_phrase(app: AppHandle, id: String, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM phrases WHERE id = ?1", params![id])
@@ -1377,7 +1579,11 @@ pub fn get_translation_history(
 }
 
 #[tauri::command]
-pub fn clear_translation_history(app: AppHandle) -> Result<(), String> {
+pub fn clear_translation_history(app: AppHandle, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM translation_history", [])
@@ -1387,6 +1593,7 @@ pub fn clear_translation_history(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_setting(app: AppHandle, key: String) -> Result<String, String> {
+    if key.starts_with("internal_") { return Err("internal setting".into()); }
     if crate::secrets::is_setting_secret(&key) {
         return Err("secret settings cannot be read by the webview".to_string());
     }
@@ -1429,6 +1636,7 @@ pub fn get_all_settings(
     let mut map = std::collections::HashMap::new();
     for row in rows {
         let (k, v) = row.map_err(|e| e.to_string())?;
+        if k.starts_with("internal_") { continue; }
         if crate::secrets::is_setting_secret(&k) {
             map.insert(format!("{k}_configured"), (!v.is_empty()).to_string());
         } else {
@@ -1438,7 +1646,8 @@ pub fn get_all_settings(
     Ok(map)
 }
 
-const EXPORT_SETTING_KEYS: &[&str] = &[
+pub(crate) const EXPORT_SETTING_KEYS: &[&str] = &[
+    "vault_auto_lock",
     "clipboard_retention",
     "dedupe_window_seconds",
     "default_translate_engine",
@@ -1455,157 +1664,22 @@ const EXPORT_SETTING_KEYS: &[&str] = &[
     "image_compression_quality",
     "large_image_handling",
     "clipboard_notifications",
+    "auto_check_updates",
 ];
 
-#[derive(Serialize, Deserialize)]
-struct ClipboardExportBundle {
-    #[serde(default)]
-    version: u32,
-    #[serde(default)]
-    exported_at: String,
-    settings: HashMap<String, String>,
-    #[serde(default)]
-    favorites: Vec<FavoriteExportRecord>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct FavoriteExportRecord {
-    id: String,
-    #[serde(rename = "type")]
-    record_type: String,
-    content: String,
-    #[serde(default)]
-    source_app: String,
-    created_at: String,
-    #[serde(default)]
-    user_api_key: bool,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    favorite_note: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    image_base64: Option<String>,
-}
-
-async fn select_export_path(app: &AppHandle) -> Result<PathBuf, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_file_name("copy-creator-backup.json")
-        .save_file(move |path| {
-            let _ = tx.send(path.map(|value| value.to_string()));
-        });
-    let selected =
-        tokio::task::spawn_blocking(move || rx.recv_timeout(std::time::Duration::from_secs(120)))
-            .await
-            .map_err(|e| format!("task error: {e}"))?
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "cancelled".to_string())?;
-    Ok(PathBuf::from(selected))
-}
-
-async fn select_import_path(app: &AppHandle) -> Result<PathBuf, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog().file().pick_file(move |path| {
-        let _ = tx.send(path.map(|value| value.to_string()));
-    });
-    let selected =
-        tokio::task::spawn_blocking(move || rx.recv_timeout(std::time::Duration::from_secs(120)))
-            .await
-            .map_err(|e| format!("task error: {e}"))?
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "cancelled".to_string())?;
-    Ok(PathBuf::from(selected))
-}
-
-#[tauri::command]
-pub async fn export_user_data(app: AppHandle) -> Result<serde_json::Value, String> {
-    let base_dir = get_storage_dir(&app);
-    let (settings, mut favorites) = {
-        let state = app.state::<DbState>();
-        let conn = state.conn.lock().map_err(|e| e.to_string())?;
-
-        let mut settings = HashMap::new();
-        for key in EXPORT_SETTING_KEYS {
-            if let Ok(value) = conn.query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                params![key],
-                |row| row.get::<_, String>(0),
-            ) {
-                settings.insert((*key).to_string(), value);
-            }
-        }
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, type, content, source_app, created_at, user_api_key, favorite_note FROM clipboard_records WHERE is_favorite = 1 ORDER BY created_at DESC",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(FavoriteExportRecord {
-                    id: row.get(0)?,
-                    record_type: row.get(1)?,
-                    content: row.get(2)?,
-                    source_app: row.get(3)?,
-                    created_at: row.get(4)?,
-                    user_api_key: row.get::<_, i64>(5)? != 0,
-                    favorite_note: row.get(6)?,
-                    image_base64: None,
-                })
-            })
-            .map_err(|e| e.to_string())?;
-        let favorites: Vec<FavoriteExportRecord> = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        let favorites: Vec<FavoriteExportRecord> = favorites.into_iter().filter(|record| {
-            !record.user_api_key
-                && !crate::secrets::is_protected(&record.content)
-                && !is_api_key(&record.content)
-        }).collect();
-        (settings, favorites)
-    };
-
-    for favorite in favorites
-        .iter_mut()
-        .filter(|record| record.record_type == "image")
-    {
-        let image_path = storage_content_path(&base_dir, &favorite.content)
-            .ok_or_else(|| format!("invalid favorite image path: {}", favorite.content))?;
-        let bytes = std::fs::read(&image_path)
-            .map_err(|e| format!("read favorite image {}: {e}", image_path.display()))?;
-        favorite.image_base64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
-    }
-
-    let bundle = ClipboardExportBundle {
-        version: 1,
-        exported_at: chrono::Utc::now().to_rfc3339(),
-        settings,
-        favorites,
-    };
-    let json = serde_json::to_vec_pretty(&bundle).map_err(|e| e.to_string())?;
-    let path = select_export_path(&app).await?;
-    std::fs::write(&path, json).map_err(|e| format!("write export: {e}"))?;
-
-    Ok(serde_json::json!({
-        "path": path.to_string_lossy(),
-        "settings_count": bundle.settings.len(),
-        "favorites_count": bundle.favorites.len(),
-    }))
-}
-
-fn validate_import_setting(key: &str, value: &str) -> Option<String> {
+pub(crate) fn validate_import_setting(key: &str, value: &str) -> Option<String> {
     if !EXPORT_SETTING_KEYS.contains(&key) || value.len() > 4_096 {
         return None;
     }
 
     let valid = match key {
+        "vault_auto_lock" => matches!(value, "never" | "24hours" | "3hours" | "on_startup"),
         "clipboard_retention" => matches!(value, "1week" | "1month" | "3months"),
         "dedupe_window_seconds" => matches!(value, "1" | "5" | "30" | "60" | "300" | "900" | "1800"),
         "default_translate_engine" => matches!(value, "google" | "ai"),
         "theme" => matches!(value, "light" | "dark"),
         "language" => matches!(value, "zh-CN" | "en"),
-        "radial_menu_enabled" | "clipboard_notifications" => matches!(value, "0" | "1"),
+        "radial_menu_enabled" | "clipboard_notifications" | "auto_check_updates" => matches!(value, "0" | "1"),
         "large_image_handling" => matches!(value, "compress" | "keep" | "skip"),
         "max_history_items" => value
             .parse::<u64>()
@@ -1624,154 +1698,10 @@ fn validate_import_setting(key: &str, value: &str) -> Option<String> {
     valid.then(|| value.to_string())
 }
 
-#[tauri::command]
-pub async fn import_user_data(app: AppHandle) -> Result<serde_json::Value, String> {
-    let path = select_import_path(&app).await?;
-    let metadata = std::fs::metadata(&path).map_err(|e| format!("read import metadata: {e}"))?;
-    if metadata.len() > 100 * 1024 * 1024 {
-        return Err("import file is larger than 100 MB".to_string());
-    }
-    let json = std::fs::read(&path).map_err(|e| format!("read import: {e}"))?;
-    let bundle: ClipboardExportBundle =
-        serde_json::from_slice(&json).map_err(|e| format!("invalid backup: {e}"))?;
-    if bundle.version != 1 && bundle.version != 0 {
-        return Err(format!("unsupported backup version: {}", bundle.version));
-    }
-
-    let settings: HashMap<String, String> = bundle
-        .settings
-        .iter()
-        .filter_map(|(key, value)| {
-            validate_import_setting(key, value).map(|value| (key.clone(), value))
-        })
-        .collect();
-    let existing_ids: HashSet<String> = {
-        let state = app.state::<DbState>();
-        let conn = state.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare("SELECT id FROM clipboard_records")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        rows.filter_map(Result::ok).collect()
-    };
-
-    let base_dir = get_storage_dir(&app);
-    let images_dir = base_dir.join("images");
-    std::fs::create_dir_all(&images_dir).map_err(|e| format!("create images folder: {e}"))?;
-    let mut staged_files = Vec::new();
-    let mut prepared = Vec::new();
-    let mut seen_ids = HashSet::new();
-
-    for mut favorite in bundle.favorites {
-        if !seen_ids.insert(favorite.id.clone()) {
-            continue;
-        }
-        if favorite.id.len() > 128
-            || !matches!(
-                favorite.record_type.as_str(),
-                "text" | "image" | "link" | "explorer" | "file"
-            )
-            || favorite.content.len() > 10 * 1024 * 1024
-            || favorite.favorite_note.chars().count() > FAVORITE_NOTE_MAX_CHARS
-        {
-            for staged in &staged_files {
-                let _ = std::fs::remove_file(staged);
-            }
-            return Err("backup contains an invalid favorite record".to_string());
-        }
-        favorite.favorite_note = favorite.favorite_note.trim().to_string();
-        if (favorite.record_type == "text" || favorite.record_type == "link")
-            && (favorite.user_api_key || is_api_key(&favorite.content))
-        {
-            favorite.content = crate::secrets::protect(&favorite.content)?;
-        }
-
-        if favorite.record_type == "image" && !existing_ids.contains(&favorite.id) {
-            let image_result = (|| -> Result<(PathBuf, String), String> {
-                let encoded = favorite
-                    .image_base64
-                    .as_deref()
-                    .ok_or_else(|| "favorite image data is missing".to_string())?;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(encoded)
-                    .map_err(|e| format!("invalid favorite image: {e}"))?;
-                if bytes.len() > 50 * 1024 * 1024 || image::load_from_memory(&bytes).is_err() {
-                    return Err("backup contains an unsupported favorite image".to_string());
-                }
-                let extension = match image::guess_format(&bytes).ok() {
-                    Some(image::ImageFormat::Jpeg) => "jpg",
-                    Some(image::ImageFormat::WebP) => "webp",
-                    _ => "png",
-                };
-                let filename = format!("import-{}.{}", uuid::Uuid::new_v4(), extension);
-                let image_path = images_dir.join(&filename);
-                std::fs::write(&image_path, &bytes)
-                    .map_err(|e| format!("write imported favorite image: {e}"))?;
-                Ok((image_path, filename))
-            })();
-            let (image_path, filename) = match image_result {
-                Ok(result) => result,
-                Err(error) => {
-                    for staged in &staged_files {
-                        let _ = std::fs::remove_file(staged);
-                    }
-                    return Err(error);
-                }
-            };
-            staged_files.push(image_path);
-            favorite.content = format!("images/{filename}");
-        }
-        prepared.push(favorite);
-    }
-
-    let import_result = (|| -> Result<(), String> {
-        let state = app.state::<DbState>();
-        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        for (key, value) in &settings {
-            tx.execute(
-                "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
-                params![key, value],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        for favorite in &prepared {
-            tx.execute(
-                "INSERT INTO clipboard_records (id, type, content, source_app, created_at, user_api_key, is_favorite, favorite_note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7) ON CONFLICT(id) DO UPDATE SET is_favorite = 1, favorite_note = excluded.favorite_note",
-                params![
-                    &favorite.id,
-                    &favorite.record_type,
-                    &favorite.content,
-                    &favorite.source_app,
-                    &favorite.created_at,
-                    favorite.user_api_key as i64,
-                    &favorite.favorite_note,
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.commit().map_err(|e| e.to_string())
-    })();
-
-    if let Err(error) = import_result {
-        for staged in &staged_files {
-            let _ = std::fs::remove_file(staged);
-        }
-        return Err(error);
-    }
-
-    if let Err(error) = enforce_clipboard_limits(&app) {
-        log::warn!("clipboard limit enforcement after import failed: {error}");
-    }
-    let _ = app.emit("clipboard-refresh", ());
-    crate::tray::schedule_tray_refresh(&app);
-    Ok(serde_json::json!({
-        "path": path.to_string_lossy(),
-        "settings_count": settings.len(),
-        "favorites_count": prepared.len(),
-    }))
+fn image_storage_dir(app: &AppHandle, expected: Option<u64>) -> Result<PathBuf,String> {
+    let db=app.state::<DbState>(); let conn=db.conn.lock().map_err(|e|e.to_string())?;
+    if expected.is_some_and(|epoch|epoch!=db.storage_epoch.load(Ordering::Relaxed)) {return Err("notes.storageChanged".into());}
+    Ok(get_storage_dir_for_connection(app,&conn))
 }
 
 #[tauri::command(async)]
@@ -1779,8 +1709,9 @@ pub fn get_image_base64(
     app: AppHandle,
     path: String,
     max_size: u32,
+    expected_storage_epoch: Option<u64>,
 ) -> Result<String, String> {
-    let mut base_dir = get_storage_dir(&app);
+    let mut base_dir = image_storage_dir(&app, expected_storage_epoch)?;
     base_dir.push(&path);
 
     let bytes = std::fs::read(&base_dir).map_err(|e| format!("read image file: {}", e))?;
@@ -1799,8 +1730,11 @@ pub fn get_image_base64(
 }
 
 #[tauri::command(async)]
-pub fn get_image_thumbnail(app: AppHandle, path: String, max_size: u32) -> Result<String, String> {
-    let base_dir = get_storage_dir(&app);
+pub fn get_image_thumbnail(app: AppHandle, path: String, max_size: u32, expected_storage_epoch: Option<u64>) -> Result<String, String> {
+    let lifecycle=app.state::<crate::lifecycle::LifecycleState>();
+    let _producer=lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    let base_dir = image_storage_dir(&app, expected_storage_epoch)?;
+    let max_size = max_size.clamp(32, 512);
     let image_path = base_dir.join(&path);
 
     // Try pre-generated thumbnail first (saved during clipboard capture)
@@ -1842,9 +1776,18 @@ pub fn get_image_thumbnail(app: AppHandle, path: String, max_size: u32) -> Resul
             .write_to(&mut buf, image::ImageFormat::Png)
             .map_err(|e| format!("encode thumbnail: {}", e))?;
         let data = buf.into_inner();
-        // Save for future use
-        std::fs::create_dir_all(&thumb_dir).ok();
-        let _ = std::fs::write(&thumb_path, &data);
+        // Decode stays outside image activity and the DB lock. A deleted
+        // record can finish its read, but must not recreate a reclaimed asset.
+        let _activity = image_activity();
+        let referenced = {
+            let state=app.state::<DbState>();
+            let conn=state.conn.lock().map_err(|e|e.to_string())?;
+            conn.query_row("SELECT EXISTS(SELECT 1 FROM clipboard_records WHERE type='image' AND content=?1)",[&path],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())?
+        };
+        if referenced && image_path.is_file() {
+            std::fs::create_dir_all(&thumb_dir).ok();
+            if std::fs::write(&thumb_path, &data).is_ok() {refresh_image_asset(&app,&path)?;}
+        }
         data
     };
 
@@ -1852,9 +1795,14 @@ pub fn get_image_thumbnail(app: AppHandle, path: String, max_size: u32) -> Resul
 }
 
 #[tauri::command]
-pub fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
+pub fn set_setting(app: AppHandle, key: String, value: String, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    if key.starts_with("internal_") { return Err("internal setting".into()); }
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     if key == "storage_path" {
-        return migrate_storage(&app, &value);
+        return Err("lifecycle.barrierRequired".into());
     }
 
     if EXPORT_SETTING_KEYS.contains(&key.as_str())
@@ -1870,6 +1818,7 @@ pub fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), Str
     {
         let state = app.state::<DbState>();
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        crate::lifecycle::allow_write(&app)?;
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
             params![&key, &value],
@@ -1880,17 +1829,22 @@ pub fn set_setting(app: AppHandle, key: String, value: String) -> Result<(), Str
         enforce_clipboard_limits(&app)?;
         crate::tray::schedule_tray_refresh(&app);
     }
+    if key == "vault_auto_lock" {
+        crate::vault::refresh_auto_lock(&app)?;
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub fn set_settings_batch(
     app: AppHandle,
-    settings: std::collections::HashMap<String, String>,
+    settings: std::collections::HashMap<String, String>, expected_storage_epoch: Option<u64>,
 ) -> Result<(), String> {
-    if let Some(storage_path) = settings.get("storage_path") {
-        migrate_storage(&app, storage_path)?;
-    }
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
+    if settings.contains_key("storage_path") { return Err("lifecycle.barrierRequired".into()); }
+    if settings.keys().any(|key| key.starts_with("internal_")) { return Err("internal setting".into()); }
 
     for (key, value) in settings
         .iter()
@@ -1914,6 +1868,7 @@ pub fn set_settings_batch(
     {
         let state = app.state::<DbState>();
         let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+        crate::lifecycle::allow_write(&app)?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         for (key, value) in settings
             .iter()
@@ -1932,131 +1887,56 @@ pub fn set_settings_batch(
         enforce_clipboard_limits(&app)?;
         crate::tray::schedule_tray_refresh(&app);
     }
+    if settings.contains_key("vault_auto_lock") {
+        crate::vault::refresh_auto_lock(&app)?;
+    }
     Ok(())
 }
 
+#[tauri::command]
+pub async fn change_storage_directory(app: AppHandle, operation_token: String, new_path: String) -> Result<u64, String> {
+    let guard = crate::lifecycle::claim_operation(&app, &operation_token, "storage")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        {
+            let db = app.state::<DbState>();
+            let _conn = db.conn.lock().map_err(|_| "lifecycle.failed")?;
+            guard.validate_epoch(&db)?;
+        }
+        migrate_storage(&app, &new_path)?;
+        let db = app.state::<DbState>();
+        let _conn = db.conn.lock().map_err(|_| "lifecycle.failed")?;
+        Ok(db.storage_epoch.load(Ordering::Relaxed))
+    }).await.map_err(|_| "lifecycle.failed")?
+}
 fn migrate_storage(app: &AppHandle, new_path: &str) -> Result<(), String> {
     let custom_dir = PathBuf::from(new_path);
-    std::fs::create_dir_all(&custom_dir).map_err(|e| format!("create dir: {}", e))?;
+    if !custom_dir.is_absolute() { return Err("notes.invalidStoragePath".into()); }
+    std::fs::create_dir_all(&custom_dir).map_err(|_| "notes.storageMigrationFailed")?;
+    let custom_dir = std::fs::canonicalize(custom_dir).map_err(|_| "notes.storageMigrationFailed")?;
     let custom_db = custom_dir.join("data.db");
-
-    // Collect all settings from current DB
-    let settings: Vec<(String, String)> = {
-        let state = app.state::<DbState>();
-        let conn = state.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare("SELECT key, value FROM settings")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+    let destination_path = custom_dir.to_str().ok_or("notes.invalidStoragePath")?.to_owned();
+    crate::vault::lock_and_notify(app);
+    let state = app.state::<DbState>();
+    let epoch = {
+        let mut conn = state.conn.lock().map_err(|_| "notes.storageMigrationFailed")?;
+        let source_file = conn.path().ok_or("notes.storageMigrationFailed")?;
+        let source_file = std::fs::canonicalize(source_file).map_err(|_| "notes.storageMigrationFailed")?;
+        if custom_db == source_file { return Ok(()); }
+        let source_path = source_file.to_str().ok_or("notes.invalidStoragePath")?.to_owned();
+        let mut destination = Connection::open(&custom_db).map_err(|_| "notes.storageMigrationFailed")?;
+        initialize_connection(&mut destination).map_err(|_| "notes.storageMigrationFailed")?;
+        crate::storage::prepare_target(&conn, &mut destination, &source_path, &destination_path, chrono::Utc::now().timestamp_millis())?;
+        // A failure leaves the old connection/epoch intact. The committed target
+        // receipt can verify and refresh only this operation's own staged data.
+        conn.execute("INSERT INTO settings(key,value) VALUES('storage_path',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [&destination_path])
+            .map_err(|_| "notes.storageMigrationFailed")?;
+        *conn = destination;
+        state.storage_epoch.fetch_add(1, Ordering::Relaxed) + 1
     };
-
-    // Create new DB with schema and settings at target location
-    let new_conn = Connection::open(&custom_db).map_err(|e| format!("open new db: {}", e))?;
-
-    new_conn
-        .execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS clipboard_records (
-                id TEXT PRIMARY KEY,
-                type TEXT NOT NULL,
-                content TEXT NOT NULL,
-                source_app TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                user_api_key INTEGER DEFAULT 0,
-                is_favorite INTEGER NOT NULL DEFAULT 0,
-                favorite_note TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS idx_clipboard_created_at ON clipboard_records(created_at);
-            CREATE TABLE IF NOT EXISTS phrase_groups (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                sort_order INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS phrases (
-                id TEXT PRIMARY KEY,
-                group_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                sort_order INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (group_id) REFERENCES phrase_groups(id) ON DELETE CASCADE
-            );
-            CREATE TABLE IF NOT EXISTS translation_history (
-                id TEXT PRIMARY KEY,
-                source_text TEXT NOT NULL,
-                target_text TEXT NOT NULL,
-                source_lang TEXT DEFAULT 'auto',
-                target_lang TEXT NOT NULL,
-                engine TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_translation_created_at ON translation_history(created_at);
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            DROP TABLE IF EXISTS api_key_labels;
-            CREATE TABLE IF NOT EXISTS api_key_labels (
-                record_id   TEXT PRIMARY KEY,
-                key_preview TEXT NOT NULL,
-                service     TEXT NOT NULL,
-                api_base    TEXT DEFAULT '',
-                note        TEXT DEFAULT '',
-                is_expired  INTEGER DEFAULT 0,
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS api_services (
-                name TEXT PRIMARY KEY,
-                api_base TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS toast_shown (
-                key_preview TEXT PRIMARY KEY
-            );
-            ",
-        )
-        .map_err(|e| format!("create schema: {}", e))?;
-
-    // Copy settings to new DB
-    {
-        let mut stmt = new_conn
-            .prepare("INSERT INTO settings (key, value) VALUES (?1, ?2)")
-            .map_err(|e| e.to_string())?;
-        for (k, v) in &settings {
-            if k != "storage_path" && k != "shortcut_key" {
-                stmt.execute(params![k, v]).map_err(|e| e.to_string())?;
-            }
-        }
-        stmt.execute(params!["storage_path", new_path])
-            .map_err(|e| e.to_string())?;
-        stmt.execute(params!["shortcut_key", ""])
-            .map_err(|e| e.to_string())?;
-    }
-
-    // Update old DB's storage_path (for chain-following on restart) and switch connection
-    {
-        let state = app.state::<DbState>();
-        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('storage_path', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1",
-            params![new_path],
-        )
-        .map_err(|e| e.to_string())?;
-        *conn = new_conn;
-    }
-
-    log::info!("Storage migrated to: {}", new_path);
+    let _ = app.emit("storage-changed", serde_json::json!({ "storage_epoch": epoch }));
+    log::info!("Storage relocation committed at epoch {epoch}");
     Ok(())
 }
-
 #[tauri::command]
 pub fn get_storage_path(app: AppHandle) -> Result<String, String> {
     Ok(get_storage_dir(&app).to_string_lossy().to_string())
@@ -2064,6 +1944,8 @@ pub fn get_storage_path(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command(async)]
 pub fn ensure_thumbnail(app: AppHandle, path: String) -> Result<String, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
     let mut base = get_storage_dir(&app);
     base.push(&path);
 
@@ -2119,8 +2001,11 @@ pub fn ensure_thumbnail(app: AppHandle, path: String) -> Result<String, String> 
 #[tauri::command]
 pub async fn select_storage_folder(app: AppHandle) -> Result<String, String> {
     use tauri_plugin_dialog::DialogExt;
+    let dialog=crate::NativeDialogScope::new().ok_or("notes.busy")?;
     let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog().file().pick_folder(move |path| {
+    let parent=app.get_webview_window("main").ok_or("notes.fileDialogFailed")?;
+    app.dialog().file().set_parent(&parent).pick_folder(move |path| {
+        let _dialog=dialog;
         let _ = tx.send(path);
     });
     let result =
@@ -2161,8 +2046,11 @@ pub fn save_api_key_label(
     key_preview: String,
     service: String,
     api_base: String,
-    note: String,
+    note: String, expected_storage_epoch: Option<u64>,
 ) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let service = service.trim().to_string();
     let api_base = api_base.trim().to_string();
     let note = note.trim().to_string();
@@ -2201,6 +2089,7 @@ struct CleanupRecord {
     content: String,
     is_favorite: bool,
     has_label: bool,
+    user_api_key: bool,
     created_at: String,
 }
 
@@ -2223,7 +2112,19 @@ fn cleanup_cutoff(period: &str) -> Result<chrono::DateTime<chrono::Utc>, String>
         .ok_or_else(|| "invalid local cleanup time".to_string())
 }
 
-fn cleanup_candidates(conn: &Connection, mode: &str, period: Option<&str>) -> Result<Vec<CleanupRecord>, String> {
+const DEFAULT_CLEANUP_CATEGORIES: &[&str] = &["text", "image", "link", "explorer", "file"];
+
+fn cleanup_categories(categories: Option<&[String]>) -> Result<Vec<String>, String> {
+    let categories = categories.map(|values| values.to_vec()).unwrap_or_else(|| {
+        DEFAULT_CLEANUP_CATEGORIES.iter().map(|value| (*value).to_string()).collect()
+    });
+    if categories.iter().any(|value| !DEFAULT_CLEANUP_CATEGORIES.contains(&value.as_str()) && value != "apikey" && value != "vault") {
+        return Err("invalid cleanup category".to_string());
+    }
+    Ok(categories)
+}
+
+fn cleanup_candidates(conn: &Connection, mode: &str, period: Option<&str>, categories: Option<&[String]>) -> Result<Vec<CleanupRecord>, String> {
     let cutoff = if mode == "older_than" {
         Some(cleanup_cutoff(period.ok_or_else(|| "missing cleanup period".to_string())?)?)
     } else if mode == "dedupe" {
@@ -2232,7 +2133,7 @@ fn cleanup_candidates(conn: &Connection, mode: &str, period: Option<&str>) -> Re
         return Err("invalid cleanup mode".to_string());
     };
     let mut stmt = conn.prepare(
-        "SELECT r.id, r.type, r.content, r.is_favorite, EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = r.id), r.created_at FROM clipboard_records r ORDER BY r.created_at DESC",
+        "SELECT r.id, r.type, r.content, r.is_favorite, EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = r.id), r.created_at, r.user_api_key FROM clipboard_records r ORDER BY r.created_at DESC",
     ).map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], |row| {
         Ok(CleanupRecord {
@@ -2240,14 +2141,35 @@ fn cleanup_candidates(conn: &Connection, mode: &str, period: Option<&str>) -> Re
             is_favorite: row.get::<_, i64>(3)? != 0,
             has_label: row.get::<_, i64>(4)? != 0,
             created_at: row.get(5)?,
+            user_api_key: row.get::<_, i64>(6)? != 0,
         })
     }).map_err(|e| e.to_string())?;
     let mut records = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?;
     if let Some(cutoff) = cutoff {
-        return Ok(records.into_iter().filter(|record| {
-            !record.is_favorite && chrono::DateTime::parse_from_rfc3339(&record.created_at)
+        let categories = cleanup_categories(categories)?;
+        let mut candidates: Vec<_> = records.into_iter().filter(|record| {
+            let is_key = record.user_api_key || record.has_label || crate::secrets::is_protected(&record.content)
+                || (matches!(record.record_type.as_str(), "text" | "link") && is_api_key(&record.content));
+            let category = if is_key { "apikey" } else { record.record_type.as_str() };
+            categories.iter().any(|selected| selected == category)
+                && !record.is_favorite && chrono::DateTime::parse_from_rfc3339(&record.created_at)
                 .is_ok_and(|created_at| created_at < cutoff)
-        }).collect());
+        }).collect();
+        if categories.iter().any(|category| category == "vault") {
+            let mut stmt = conn.prepare("SELECT id, created_at FROM vault_entries").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let (id, created_at) = row.map_err(|e| e.to_string())?;
+                if chrono::DateTime::parse_from_rfc3339(&created_at).is_ok_and(|created_at| created_at < cutoff) {
+                    candidates.push(CleanupRecord {
+                        id, created_at, record_type: "vault".to_string(), content: String::new(),
+                        is_favorite: false, has_label: false, user_api_key: false,
+                    });
+                }
+            }
+        }
+        return Ok(candidates);
     }
     records.sort_by(|left, right| {
         let left_time = chrono::DateTime::parse_from_rfc3339(&left.created_at).ok();
@@ -2273,33 +2195,55 @@ fn cleanup_candidates(conn: &Connection, mode: &str, period: Option<&str>) -> Re
 }
 
 #[tauri::command]
-pub fn preview_clipboard_cleanup(app: AppHandle, mode: String, period: Option<String>) -> Result<usize, String> {
-    let state = app.state::<DbState>();
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    Ok(cleanup_candidates(&conn, &mode, period.as_deref())?.len())
+pub fn preview_clipboard_cleanup(app: AppHandle, mode: String, period: Option<String>, categories: Option<Vec<String>>) -> Result<usize, String> {
+    let preview = || {
+        let state = app.state::<DbState>();
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        Ok(cleanup_candidates(&conn, &mode, period.as_deref(), categories.as_deref())?.len())
+    };
+    if mode == "older_than" && categories.as_ref().is_some_and(|values| values.iter().any(|value| value == "vault")) {
+        crate::vault::with_cleanup_access(&app, preview)
+    } else {
+        preview()
+    }
 }
 
-#[tauri::command]
-pub fn apply_clipboard_cleanup(app: AppHandle, mode: String, period: Option<String>) -> Result<usize, String> {
-    let candidates = {
-        let state = app.state::<DbState>();
-        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
-        let candidates = cleanup_candidates(&conn, &mode, period.as_deref())?;
-        if candidates.is_empty() { return Ok(0); }
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        for record in &candidates {
+fn delete_cleanup_candidates(conn: &mut Connection, mode: &str, period: Option<&str>, categories: Option<&[String]>) -> Result<Vec<CleanupRecord>, String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let candidates = cleanup_candidates(&tx, mode, period, categories)?;
+    for record in &candidates {
+        if record.record_type == "vault" {
+            tx.execute("DELETE FROM vault_entries WHERE id = ?1", params![&record.id]).map_err(|e| e.to_string())?;
+        } else {
             tx.execute("DELETE FROM api_key_labels WHERE record_id = ?1", params![&record.id]).map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM clipboard_records WHERE id = ?1", params![&record.id]).map_err(|e| e.to_string())?;
         }
-        tx.commit().map_err(|e| e.to_string())?;
-        candidates
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(candidates)
+}
+
+#[tauri::command]
+pub fn apply_clipboard_cleanup(app: AppHandle, mode: String, period: Option<String>, categories: Option<Vec<String>>, expected_storage_epoch: Option<u64>,
+) -> Result<usize, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
+    let apply = || {
+        let state = app.state::<DbState>();
+        let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+        delete_cleanup_candidates(&mut conn, &mode, period.as_deref(), categories.as_deref())
+    };
+    let candidates = if mode == "older_than" && categories.as_ref().is_some_and(|values| values.iter().any(|value| value == "vault")) {
+        crate::vault::with_cleanup_access(&app, apply)?
+    } else {
+        apply()?
     };
     let image_contents: Vec<String> = candidates.iter().filter(|record| record.record_type == "image").map(|record| record.content.clone()).collect();
     let state = app.state::<DbState>();
     let unreferenced = collect_unreferenced_image_contents(&state, &image_contents)?;
-    let base_dir = get_storage_dir(&app);
-    for content in unreferenced { remove_stored_image(&base_dir, &content); }
-    let _ = app.emit("clipboard-refresh", ());
+    for content in unreferenced { reclaim_stored_image(&app, &content)?; }
+    let _ = crate::storage_events::emit(&app,"clipboard-refresh", ());
     crate::tray::schedule_tray_refresh(&app);
     Ok(candidates.len())
 }
@@ -2342,7 +2286,11 @@ pub fn get_api_key_label(app: AppHandle, record_id: String) -> Option<serde_json
 }
 
 #[tauri::command]
-pub fn delete_api_key_label(app: AppHandle, record_id: String) -> Result<(), String> {
+pub fn delete_api_key_label(app: AppHandle, record_id: String, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
@@ -2388,7 +2336,11 @@ pub fn list_api_key_labels(app: AppHandle) -> Result<Vec<serde_json::Value>, Str
 }
 
 #[tauri::command]
-pub fn mark_expired(app: AppHandle, record_id: String, expired: bool) -> Result<(), String> {
+pub fn mark_expired(app: AppHandle, record_id: String, expired: bool, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
@@ -2408,7 +2360,11 @@ pub fn export_labels_json(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn mark_toast_shown(app: AppHandle, key_preview: String) -> Result<(), String> {
+pub fn mark_toast_shown(app: AppHandle, key_preview: String, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
@@ -2425,7 +2381,11 @@ pub fn is_toast_shown(app: AppHandle, key_preview: String) -> bool {
 }
 
 #[tauri::command]
-pub fn set_user_api_key(app: AppHandle, id: String, value: bool) -> Result<(), String> {
+pub fn set_user_api_key(app: AppHandle, id: String, value: bool, expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     let content: String = conn.query_row("SELECT content FROM clipboard_records WHERE id = ?1", params![&id], |row| row.get(0)).map_err(|e| e.to_string())?;
@@ -2444,15 +2404,316 @@ pub fn set_user_api_key(app: AppHandle, id: String, value: bool) -> Result<(), S
 mod tests {
     use super::*;
 
+    fn legacy_v3(conn: &Connection) {
+        initialize_schema_v1(conn).unwrap();
+        crate::notes::init_schema(conn).unwrap();
+        crate::note_backup::init_schema(conn).unwrap();
+        conn.execute_batch("PRAGMA user_version=3;").unwrap();
+    }
+
+    #[test]
+    fn clipboard_accounting_migrates_existing_shared_assets_once_and_rolls_back_failures() {
+        let root=std::env::temp_dir().join(format!("copy-creator-accounting-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("images/thumbs")).unwrap();
+        std::fs::write(root.join("images/shared.png"),[0u8;100]).unwrap();
+        std::fs::write(root.join("images/thumbs/shared.png"),[0u8;20]).unwrap();
+        let path=root.join("data.db");
+        {
+            let mut conn=Connection::open(&path).unwrap();legacy_v3(&conn);
+            conn.execute_batch("INSERT INTO clipboard_records(id,type,content,created_at,is_favorite) VALUES
+              ('a','image','images/shared.png','now',0),('b','image','images/shared.png','now',1),('c','text','中文','now',0);").unwrap();
+            initialize_connection(&mut conn).unwrap();
+            let usage=crate::clipboard_usage::get(&conn).unwrap();
+            assert_eq!((usage.records,usage.favorites,usage.bytes),(3,1,894));
+            initialize_connection(&mut conn).unwrap();assert_eq!(crate::clipboard_usage::get(&conn).unwrap().bytes,894);
+        }
+        for file in ["images/shared.png","images/thumbs/shared.png","data.db","data.db-wal","data.db-shm"] {let _=std::fs::remove_file(root.join(file));}
+        std::fs::remove_dir(root.join("images/thumbs")).unwrap();std::fs::remove_dir(root.join("images")).unwrap();std::fs::remove_dir(root).unwrap();
+        let mut broken=Connection::open_in_memory().unwrap();legacy_v3(&broken);
+        broken.execute_batch("CREATE TABLE clipboard_assets(existing TEXT);INSERT INTO clipboard_assets VALUES('kept');").unwrap();
+        assert!(initialize_connection(&mut broken).is_err());
+        assert_eq!(broken.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        assert!(broken.prepare("SELECT * FROM clipboard_usage").is_err());
+        assert_eq!(broken.query_row("SELECT existing FROM clipboard_assets",[],|r|r.get::<_,String>(0)).unwrap(),"kept");
+    }
+
+    #[test]
+    fn clipboard_reclamation_rechecks_references_and_retains_failed_unlinks() {
+        let root=std::env::temp_dir().join(format!("copy-creator-reclaim-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("images/thumbs")).unwrap();
+        std::fs::write(root.join("images/shared.png"),[0u8;10]).unwrap();
+        std::fs::write(root.join("images/thumbs/shared.png"),[0u8;5]).unwrap();
+        let mut conn=Connection::open_in_memory().unwrap();initialize_connection(&mut conn).unwrap();
+        conn.execute_batch("INSERT INTO clipboard_records(id,type,content,created_at) VALUES('new-reference','image','images/shared.png','now');").unwrap();
+        crate::clipboard_usage::set_asset_size(&conn,"images/shared.png",15).unwrap();
+        assert!(!reclaim_image(&mut conn,&root,"images/shared.png").unwrap());
+        assert!(root.join("images/shared.png").exists());
+        conn.execute("DELETE FROM clipboard_records",[]).unwrap();
+        assert!(reclaim_image(&mut conn,&root,"images/shared.png").unwrap());
+        assert!(!root.join("images/shared.png").exists());assert!(!root.join("images/thumbs/shared.png").exists());
+        // A directory cannot be unlinked as a file. Keep its zero-reference
+        // ledger entry for retry rather than claiming reclamation succeeded.
+        std::fs::create_dir(root.join("images/blocked.png")).unwrap();
+        crate::clipboard_usage::set_asset_size(&conn,"images/blocked.png",20).unwrap();
+        assert!(!reclaim_image(&mut conn,&root,"images/blocked.png").unwrap());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM clipboard_assets",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        std::fs::write(root.join("data.db"),b"keep").unwrap();
+        crate::clipboard_usage::set_asset_size(&conn,"data.db",4).unwrap();
+        assert!(reclaim_image(&mut conn,&root,"data.db").unwrap());assert!(root.join("data.db").exists());
+        std::fs::remove_file(root.join("data.db")).unwrap();std::fs::remove_dir(root.join("images/blocked.png")).unwrap();
+        std::fs::remove_dir(root.join("images/thumbs")).unwrap();std::fs::remove_dir(root.join("images")).unwrap();std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn clipboard_retention_batches_do_not_materialize_text_bodies() {
+        let mut conn=Connection::open_in_memory().unwrap();initialize_connection(&mut conn).unwrap();
+        conn.execute_batch("WITH RECURSIVE n(x) AS(VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<205)
+          INSERT INTO clipboard_records(id,type,content,created_at) SELECT printf('%03d',x),'text',CAST(zeroblob(4096) AS TEXT),'2000-01-01' FROM n;").unwrap();
+        let first=prune_expired_records(&conn,30).unwrap();assert_eq!(first.len(),100);assert!(first.iter().all(|r|r.2.is_empty()));
+        assert_eq!(prune_expired_records(&conn,30).unwrap().len(),100);
+        assert_eq!(prune_expired_records(&conn,30).unwrap().len(),5);
+        assert_eq!(crate::clipboard_usage::get(&conn).unwrap().bytes,0);
+    }
+
+    #[test]
+    fn assets_follow_open_database_even_when_forwarding_destination_is_missing() {
+        let root = std::env::temp_dir().join(format!("copy-creator-route-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let missing = root.join("missing-destination");
+        let file = root.join("data.db");
+        let conn = Connection::open(&file).unwrap();
+        conn.execute_batch("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)").unwrap();
+        conn.execute("INSERT INTO settings VALUES('storage_path',?1)", [missing.to_str().unwrap()]).unwrap();
+        assert_eq!(connection_storage_dir(&conn), Some(root.clone()));
+        assert!(!missing.exists());
+        assert_eq!(connection_storage_dir(&Connection::open_in_memory().unwrap()), None);
+        drop(conn);
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn permanent_unlink_failures_do_not_starve_later_assets() {
+        let root = std::env::temp_dir().join(format!("copy-creator-retry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("images")).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut conn).unwrap();
+        for index in 0..205 {
+            let path = format!("images/{index:03}.png");
+            if index < 100 { std::fs::create_dir(root.join(&path)).unwrap(); }
+            else { std::fs::write(root.join(&path), b"synthetic").unwrap(); }
+            crate::clipboard_usage::set_asset_size(&conn, &path, 9).unwrap();
+        }
+        let mut cursor = None;
+        let mut removed = 0;
+        for _ in 0..3 {
+            let page = crate::clipboard_usage::reclaim_candidates(&conn, cursor.as_deref()).unwrap();
+            assert!(page.len() <= 100);
+            cursor = page.last().cloned();
+            for path in page { removed += usize::from(reclaim_image(&mut conn, &root, &path).unwrap()); }
+        }
+        assert_eq!(removed, 105);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM clipboard_assets", [], |row| row.get::<_, i64>(0)).unwrap(), 100);
+        for index in 0..100 { std::fs::remove_dir(root.join(format!("images/{index:03}.png"))).unwrap(); }
+        std::fs::remove_dir(root.join("images")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "Release-only synthetic accounting comparison; run explicitly"]
+    fn clipboard_accounting_release_benchmark() {
+        assert!(!cfg!(debug_assertions),"run with cargo test --release");
+        let root=std::env::temp_dir().join(format!("copy-creator-benchmark-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("images/thumbs")).unwrap();
+        let mut conn=Connection::open_in_memory().unwrap();initialize_connection(&mut conn).unwrap();
+        {
+            let tx=conn.transaction().unwrap();
+            let body="x".repeat(4096);
+            for index in 0..5000 {tx.execute("INSERT INTO clipboard_records(id,type,content,created_at) VALUES(?1,'text',?2,'2026-10-07')",params![format!("text-{index}"),body]).unwrap();}
+            for index in 0..32 {
+                let path=format!("images/{index}.png");
+                std::fs::write(root.join(&path),[0u8;64]).unwrap();std::fs::write(root.join(format!("images/thumbs/{index}.png")),[0u8;16]).unwrap();
+                crate::clipboard_usage::set_asset_size(&tx,&path,80).unwrap();
+                tx.execute("INSERT INTO clipboard_records(id,type,content,created_at) VALUES(?1,'image',?2,'2026-10-07')",params![format!("image-{index}"),path]).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let expected=usage_bytes(&load_usage_records(&conn).unwrap(),&root).0;
+        assert_eq!(crate::clipboard_usage::get(&conn).unwrap().bytes,expected);
+        fn measure(mut operation:impl FnMut()) -> serde_json::Value {
+            for _ in 0..5 {operation();}
+            let mut samples=Vec::new();
+            for _ in 0..60 {let begin=std::time::Instant::now();operation();samples.push(begin.elapsed().as_secs_f64()*1000.0);}
+            samples.sort_by(f64::total_cmp);
+            serde_json::json!({"p50_ms":samples[29],"p95_ms":samples[56],"samples":samples.len()})
+        }
+        let old=measure(||{std::hint::black_box(usage_bytes(&load_usage_records(&conn).unwrap(),&root));});
+        let incremental=measure(||{std::hint::black_box(crate::clipboard_usage::get(&conn).unwrap());});
+        println!("BENCHMARK_JSON {}",serde_json::json!({"kind":"clipboard-accounting","profile":"release","fixture":{"text_records":5000,"text_bytes_each":4096,"unique_images":32,"image_and_thumb_bytes_each":80},"expected_usage_bytes":expected,"old_full_scan_and_metadata":old,"incremental":incremental,"scope":"warm in-memory SQLite accounting only; excludes IPC, capture, filesystem allocation and application latency"}));
+        drop(conn);
+        for index in 0..32 {std::fs::remove_file(root.join(format!("images/{index}.png"))).unwrap();std::fs::remove_file(root.join(format!("images/thumbs/{index}.png"))).unwrap();}
+        std::fs::remove_dir(root.join("images/thumbs")).unwrap();std::fs::remove_dir(root.join("images")).unwrap();std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn clipboard_cursor_ties_and_new_inserts_do_not_shift_later_pages() {
+        let mut conn=Connection::open_in_memory().unwrap(); initialize_connection(&mut conn).unwrap();
+        for id in ["a","b","c","d"] {
+            conn.execute("INSERT INTO clipboard_records(id,type,content,created_at) VALUES(?1,'text',?1,'2026-10-07T00:00:00Z')",[id]).unwrap();
+        }
+        let first=query_clipboard_records(&conn,None,Some(2),None,None,None).unwrap();
+        assert_eq!(first.iter().map(|r|r["id"].as_str().unwrap()).collect::<Vec<_>>(),vec!["d","c"]);
+        conn.execute("INSERT INTO clipboard_records(id,type,content,created_at) VALUES('new','text','new','2026-10-08T00:00:00Z')",[]).unwrap();
+        let next=query_clipboard_records(&conn,None,Some(2),Some(100),None,Some(ClipboardCursor{created_at:first[1]["created_at"].as_str().unwrap().into(),id:"c".into()})).unwrap();
+        assert_eq!(next.iter().map(|r|r["id"].as_str().unwrap()).collect::<Vec<_>>(),vec!["b","a"]);
+    }
+
+    #[test]
+    fn clipboard_page_search_is_literal_and_enriches_only_returned_protected_keys() {
+        let mut conn=Connection::open_in_memory().unwrap(); initialize_connection(&mut conn).unwrap();
+        conn.execute("INSERT INTO clipboard_records(id,type,content,created_at,favorite_note) VALUES('literal','text','plain','now','100%_done')",[]).unwrap();
+        conn.execute("INSERT INTO clipboard_records(id,type,content,created_at,favorite_note) VALUES('other','text','plain','now','100XXdone')",[]).unwrap();
+        let result=query_clipboard_records(&conn,Some("%_".into()),Some(10),None,None,None).unwrap();
+        assert_eq!(result.len(),1); assert_eq!(result[0]["id"],"literal");
+        let protected=crate::secrets::protect("sk-fixture-example-1234567890").unwrap();
+        conn.execute("INSERT INTO clipboard_records(id,type,content,created_at) VALUES('key','text',?1,'later')",[protected]).unwrap();
+        conn.execute("INSERT INTO api_key_labels(record_id,key_preview,service,created_at,updated_at) VALUES('key','preview','fixture','now','now')",[]).unwrap();
+        let keys=query_clipboard_records(&conn,None,Some(10),None,Some("apikey".into()),None).unwrap();
+        assert_eq!(keys.len(),1); assert_eq!(keys[0]["label"]["service"],"fixture");
+        assert!(!keys[0]["content"].as_str().unwrap().contains("1234567890"));
+    }
+
+    #[test]
+    fn shared_connection_migration_is_idempotent_and_preserves_existing_target_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut conn).unwrap();
+        conn.execute("INSERT INTO api_key_labels(record_id,key_preview,service,created_at,updated_at) VALUES ('kept','preview','service','now','now')", []).unwrap();
+        conn.execute("UPDATE settings SET value='dark' WHERE key='theme'", []).unwrap();
+        initialize_connection(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version",[],|r| r.get::<_,i64>(0)).unwrap(),5);
+        assert_eq!(conn.query_row("PRAGMA synchronous",[],|r| r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(conn.query_row("PRAGMA foreign_keys",[],|r| r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(conn.query_row("PRAGMA cache_size",[],|r| r.get::<_,i64>(0)).unwrap(),-8000);
+        assert_eq!(conn.query_row("PRAGMA busy_timeout",[],|r| r.get::<_,i64>(0)).unwrap(),5000);
+        assert_eq!(conn.query_row("SELECT value FROM settings WHERE key='theme'",[],|r| r.get::<_,String>(0)).unwrap(),"dark");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM api_key_labels",[],|r| r.get::<_,i64>(0)).unwrap(),1);
+        for table in ["notes","note_refs","vault_entries","vault_config","clipboard_records","translation_history","phrases"] {
+            assert!(conn.prepare(&format!("SELECT * FROM {table} LIMIT 0")).is_ok());
+        }
+    }
+
+    #[test]
+    fn failed_schema_step_rolls_back_tables_and_version() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // A malformed legacy table forces the first migration to fail after creating tables.
+        conn.execute_batch("CREATE TABLE clipboard_records(id TEXT PRIMARY KEY);").unwrap();
+        assert!(initialize_connection(&mut conn).is_err());
+        assert_eq!(conn.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert!(!conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='settings')",[],|r|r.get::<_,bool>(0)).unwrap());
+        assert!(table_has_column(&conn,"clipboard_records","id").unwrap());
+    }
+
+    #[test]
+    fn future_schema_is_rejected_without_migrating_or_removing_data() {
+        let mut conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA user_version=99; CREATE TABLE future_data(value TEXT); INSERT INTO future_data VALUES ('preserved');").unwrap();
+        assert!(initialize_connection(&mut conn).is_err());
+        assert_eq!(conn.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),99);
+        assert_eq!(conn.query_row("SELECT value FROM future_data",[],|r|r.get::<_,String>(0)).unwrap(),"preserved");
+        assert!(conn.prepare("SELECT * FROM notes").is_err());
+    }
+
+    #[test]
+    fn file_connections_share_wal_configuration() {
+        let path = std::env::temp_dir().join(format!("copy-creator-schema-{}.db", uuid::Uuid::new_v4()));
+        for _ in 0..2 {
+            let mut conn = Connection::open(&path).unwrap();
+            initialize_connection(&mut conn).unwrap();
+            assert_eq!(conn.query_row("PRAGMA journal_mode",[],|r|r.get::<_,String>(0)).unwrap(),"wal");
+            assert_eq!(conn.query_row("PRAGMA synchronous",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn notes_step_failure_keeps_the_previous_schema_version() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut conn).unwrap();
+        conn.execute_batch("DROP TABLE note_refs; DROP TABLE notes; CREATE TABLE notes(id TEXT PRIMARY KEY); PRAGMA user_version=1;").unwrap();
+        assert!(initialize_connection(&mut conn).is_err());
+        assert_eq!(conn.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert!(conn.prepare("SELECT * FROM note_refs").is_err());
+        assert!(conn.prepare("SELECT * FROM settings").is_ok());
+    }
+
+    #[test]
+    fn clipboard_retention_does_not_remove_independent_notes_or_refs() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize_connection(&mut conn).unwrap();
+        conn.execute_batch("INSERT INTO clipboard_records(id,type,content,created_at) VALUES ('expired','text','original','2000-01-01');
+            INSERT INTO notes(id,title,body,summary,char_count,byte_count,created_at_ms,updated_at_ms,revision,creation_mutation_id,creation_hash,last_mutation_id,last_mutation_hash)
+            VALUES ('independent','','snapshot','snapshot',8,8,1,1,1,'creation','hash','creation','hash');
+            INSERT INTO note_refs VALUES ('ref','independent','url','https://example.com','reference',0);").unwrap();
+        assert_eq!(prune_expired_records(&conn,30).unwrap().len(),1);
+        assert_eq!(conn.query_row("SELECT body FROM notes WHERE id='independent'",[],|r|r.get::<_,String>(0)).unwrap(),"snapshot");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM note_refs",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn limit_save_requires_current_confirmation_and_preserves_protected_records() {
+        let mut conn = cleanup_test_connection();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO settings VALUES ('max_history_items', '2000');").unwrap();
+        for (id, favorite, key) in [("favorite", 1, 0), ("key", 0, 1), ("old", 0, 0), ("new", 0, 0)] {
+            conn.execute("INSERT INTO clipboard_records (id, type, content, is_favorite, user_api_key, created_at) VALUES (?1, 'text', ?1, ?2, ?3, ?1)", params![id, favorite, key]).unwrap();
+        }
+        let base = Path::new("unused-test-storage");
+        let proposal = persist_clipboard_limit(&mut conn, base, "max_history_items", "2", None).unwrap();
+        assert!(!proposal.0);
+        assert_eq!(proposal.1.len(), 2);
+        assert_eq!(setting_u64(&conn, "max_history_items", 0), 2000);
+        assert_eq!(load_usage_records(&conn).unwrap().len(), 4);
+        conn.execute("INSERT INTO clipboard_records VALUES ('added', 'text', 'added', 0, 'added', 0)", []).unwrap();
+        let changed = persist_clipboard_limit(&mut conn, base, "max_history_items", "2", Some(2)).unwrap();
+        assert!(!changed.0);
+        assert_eq!(changed.1.len(), 3);
+        assert_eq!(setting_u64(&conn, "max_history_items", 0), 2000);
+        assert_eq!(load_usage_records(&conn).unwrap().len(), 5);
+        conn.execute_batch("CREATE TRIGGER fail_cleanup BEFORE DELETE ON clipboard_records WHEN OLD.id = 'new' BEGIN SELECT RAISE(ABORT, 'simulated failure'); END;").unwrap();
+        assert!(persist_clipboard_limit(&mut conn, base, "max_history_items", "2", Some(3)).is_err());
+        assert_eq!(setting_u64(&conn, "max_history_items", 0), 2000);
+        assert_eq!(load_usage_records(&conn).unwrap().len(), 5);
+        conn.execute_batch("DROP TRIGGER fail_cleanup;").unwrap();
+        let committed = persist_clipboard_limit(&mut conn, base, "max_history_items", "2", Some(3)).unwrap();
+        assert!(committed.0);
+        assert_eq!(setting_u64(&conn, "max_history_items", 0), 2);
+        let remaining = load_usage_records(&conn).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.iter().all(|record| record.is_favorite || record.protected_key));
+    }
+
+    #[test]
+    fn limit_cleanup_keeps_shared_images_until_last_reference() {
+        let record = |id: &str, favorite| UsageRecord { id: id.into(), record_type: "image".into(), content: "shared.png".into(), is_favorite: favorite, protected_key: false };
+        let records = [record("old", false), record("new", false), record("favorite", true)];
+        let (deleted, images) = plan_limit_cleanup(&records, Path::new("unused-test-storage"), 1, u64::MAX);
+        assert_eq!(deleted, ["old", "new"]);
+        assert!(images.is_empty());
+        let (deleted, images) = plan_limit_cleanup(&records[..2], Path::new("unused-test-storage"), 0, u64::MAX);
+        assert_eq!(deleted, ["old", "new"]);
+        assert_eq!(images, ["shared.png"]);
+    }
+
     fn cleanup_test_connection() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE clipboard_records (
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, content TEXT NOT NULL,
-                is_favorite INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+                is_favorite INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+                user_api_key INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE api_key_labels (record_id TEXT PRIMARY KEY);",
         ).unwrap();
+        crate::clipboard_usage::init_schema(&conn).unwrap();
         conn
     }
 
@@ -2473,7 +2734,7 @@ mod tests {
             ).unwrap();
         }
         conn.execute("INSERT INTO api_key_labels (record_id) VALUES ('key')", []).unwrap();
-        let mut ids: Vec<_> = cleanup_candidates(&conn, "dedupe", None).unwrap()
+        let mut ids: Vec<_> = cleanup_candidates(&conn, "dedupe", None, None).unwrap()
             .into_iter().map(|record| record.id).collect();
         ids.sort();
         assert_eq!(ids, ["key-duplicate", "new", "old"]);
@@ -2495,7 +2756,7 @@ mod tests {
                 params![id, favorite, created_at],
             ).unwrap();
         }
-        let ids: Vec<_> = cleanup_candidates(&conn, "older_than", Some("today")).unwrap()
+        let ids: Vec<_> = cleanup_candidates(&conn, "older_than", Some("today"), None).unwrap()
             .into_iter().map(|record| record.id).collect();
         assert_eq!(ids, ["old"]);
     }
@@ -2504,6 +2765,95 @@ mod tests {
     fn ambiguous_sk_prefix_does_not_assign_a_provider() {
         assert_eq!(guess_service("sk-example-shared-prefix"), None);
         assert_eq!(guess_service("AIza-example"), Some("Gemini"));
+    }
+
+    fn bulk_cleanup_fixture() -> Connection {
+        let conn = cleanup_test_connection();
+        conn.execute_batch("CREATE TABLE vault_entries (id TEXT PRIMARY KEY, created_at TEXT NOT NULL);").unwrap();
+        let cutoff = cleanup_cutoff("today").unwrap();
+        let old = (cutoff - chrono::Duration::seconds(1)).to_rfc3339();
+        let recent = cutoff.to_rfc3339();
+        for (id, kind, content, favorite, user_key, created_at) in [
+            ("text", "text", "ordinary text", 0, 0, old.as_str()),
+            ("image", "image", "image.png", 0, 0, old.as_str()),
+            ("link", "link", "https://example.test", 0, 0, old.as_str()),
+            ("explorer", "explorer", "C:\\folder", 0, 0, old.as_str()),
+            ("file", "file", "C:\\file.txt", 0, 0, old.as_str()),
+            ("detected-key", "text", "sk-example-clipboard-secret", 0, 0, old.as_str()),
+            ("link-key", "link", "sk-example-clipboard-secret", 0, 0, old.as_str()),
+            ("manual-key", "text", "custom credential", 0, 1, old.as_str()),
+            ("encrypted-key", "text", "dpapi:v1:opaque", 0, 0, old.as_str()),
+            ("labeled-key", "text", "custom labeled credential", 0, 0, old.as_str()),
+            ("favorite-key", "text", "sk-example-favorite-secret", 1, 1, old.as_str()),
+            ("favorite", "text", "keep favorite", 1, 0, old.as_str()),
+            ("recent", "text", "keep recent", 0, 0, recent.as_str()),
+        ] {
+            conn.execute("INSERT INTO clipboard_records (id, type, content, is_favorite, user_api_key, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, kind, content, favorite, user_key, created_at]).unwrap();
+        }
+        conn.execute("INSERT INTO api_key_labels VALUES ('labeled-key')", []).unwrap();
+        conn.execute("INSERT INTO vault_entries VALUES ('text', ?1), ('recent-vault', ?2)", params![old, recent]).unwrap();
+        conn
+    }
+
+    #[test]
+    fn bulk_delete_defaults_preserve_all_key_variants_and_vault() {
+        let mut conn = bulk_cleanup_fixture();
+        let preview = cleanup_candidates(&conn, "older_than", Some("today"), None).unwrap();
+        let deleted = delete_cleanup_candidates(&mut conn, "older_than", Some("today"), None).unwrap();
+        assert_eq!(preview.len(), 5);
+        assert_eq!(deleted.len(), preview.len());
+        let remaining: i64 = conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get(0)).unwrap();
+        let vault: i64 = conn.query_row("SELECT COUNT(*) FROM vault_entries", [], |row| row.get(0)).unwrap();
+        assert_eq!(remaining, 8);
+        assert_eq!(vault, 2);
+        assert!(deleted.iter().all(|record| DEFAULT_CLEANUP_CATEGORIES.contains(&record.record_type.as_str())));
+    }
+
+    #[test]
+    fn bulk_delete_text_selection_excludes_keys_and_other_types() {
+        let mut conn = bulk_cleanup_fixture();
+        let categories = vec!["text".to_string()];
+        let deleted = delete_cleanup_candidates(&mut conn, "older_than", Some("today"), Some(&categories)).unwrap();
+        assert_eq!(deleted.iter().map(|record| record.id.as_str()).collect::<Vec<_>>(), ["text"]);
+    }
+
+    #[test]
+    fn bulk_delete_keys_and_vault_require_explicit_categories() {
+        let mut conn = bulk_cleanup_fixture();
+        let categories = vec!["apikey".to_string(), "vault".to_string()];
+        let preview = cleanup_candidates(&conn, "older_than", Some("today"), Some(&categories)).unwrap();
+        let deleted = delete_cleanup_candidates(&mut conn, "older_than", Some("today"), Some(&categories)).unwrap();
+        assert_eq!(preview.len(), 6);
+        assert_eq!(deleted.len(), preview.len());
+        let remaining: i64 = conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get(0)).unwrap();
+        assert_eq!(remaining, 8);
+        let vault_ids: Vec<String> = conn.prepare("SELECT id FROM vault_entries").unwrap().query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(vault_ids, ["recent-vault"]);
+        let labels: i64 = conn.query_row("SELECT COUNT(*) FROM api_key_labels", [], |row| row.get(0)).unwrap();
+        assert_eq!(labels, 0);
+        // IDs may coincide across the clipboard and vault; deleting one must not delete the other.
+        assert!(conn.query_row("SELECT 1 FROM clipboard_records WHERE id = 'text'", [], |_| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn bulk_delete_empty_or_invalid_selection_does_not_delete() {
+        let mut conn = bulk_cleanup_fixture();
+        assert!(delete_cleanup_candidates(&mut conn, "older_than", Some("today"), Some(&[])).unwrap().is_empty());
+        assert!(delete_cleanup_candidates(&mut conn, "older_than", Some("today"), Some(&["all".to_string()])).is_err());
+        assert!(delete_cleanup_candidates(&mut conn, "older_than", Some("invalid"), None).is_err());
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 13);
+    }
+
+    #[test]
+    fn bulk_delete_rolls_back_clipboard_when_vault_deletion_fails() {
+        let mut conn = bulk_cleanup_fixture();
+        conn.execute_batch("CREATE TRIGGER fail_vault_delete BEFORE DELETE ON vault_entries BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        let categories = vec!["text".to_string(), "vault".to_string()];
+        assert!(delete_cleanup_candidates(&mut conn, "older_than", Some("today"), Some(&categories)).is_err());
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 13);
     }
 
     #[test]
@@ -2670,6 +3020,8 @@ mod tests {
         .unwrap();
         let state = DbState {
             conn: Mutex::new(conn),
+            storage_epoch: AtomicU64::new(1),
+            asset_reclaim_cursor: Mutex::new(None),
         };
 
         let unreferenced = collect_unreferenced_image_contents(
@@ -2680,5 +3032,28 @@ mod tests {
 
         assert_eq!(unreferenced, vec!["images/orphan.png"]);
         assert!(state.conn.try_lock().is_ok());
+    }
+
+    #[test]
+    fn automatic_cleanup_preserves_unfavorited_restored_api_keys() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE clipboard_records (id TEXT PRIMARY KEY, type TEXT NOT NULL, content TEXT NOT NULL,
+            user_api_key INTEGER DEFAULT 0, is_favorite INTEGER DEFAULT 0, created_at TEXT NOT NULL);
+            CREATE TABLE api_key_labels (record_id TEXT PRIMARY KEY);
+            INSERT INTO clipboard_records VALUES
+            ('ordinary', 'text', 'Old ordinary text', 0, 0, '2020-01-01T00:00:00Z'),
+            ('manual-key', 'text', 'Manual key', 1, 0, '2020-01-01T00:00:00Z'),
+            ('protected-key', 'text', 'dpapi:v1:ciphertext', 0, 0, '2020-01-01T00:00:00Z'),
+            ('labeled-key', 'text', 'Labeled key', 0, 0, '2020-01-01T00:00:00Z'),
+            ('favorite', 'text', 'Favorite', 0, 1, '2020-01-01T00:00:00Z');
+            INSERT INTO api_key_labels VALUES ('labeled-key');").unwrap();
+        let records = load_usage_records(&conn).unwrap();
+        let eligible: Vec<_> = records.iter().filter(|record| !record.is_favorite && !record.protected_key).map(|record| record.id.as_str()).collect();
+        assert_eq!(eligible, ["ordinary"]);
+        assert_eq!(records.iter().filter(|record| record.is_favorite).count(), 1);
+        let deleted = prune_expired_records(&conn, 30).unwrap();
+        assert_eq!(deleted.len(), 1); assert_eq!(deleted[0].0, "ordinary");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get::<_, i64>(0)).unwrap(), 4);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM api_key_labels", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
     }
 }

@@ -1,4 +1,6 @@
-import { memo, useCallback, useState, useEffect, useRef } from "react";
+import { invokeStorage, getStorageIdentity } from "../../lib/storageIdentity";
+import { memo, useCallback, useState, useEffect, useLayoutEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import StarBorderRoundedIcon from "@mui/icons-material/StarBorderRounded";
 import StarRoundedIcon from "@mui/icons-material/StarRounded";
@@ -51,6 +53,9 @@ function ClipboardCardInner({
   const [textExpanded, setTextExpanded] = useState(false);
   const [fullContent, setFullContent] = useState<string | null>(null);
   const [loadingFullContent, setLoadingFullContent] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const captureFlight = useRef(false);
   const ctxRef = useRef<HTMLDivElement>(null);
   const loadRecords = useClipboardStore((s) => s.loadRecords);
   const getRecordContent = useClipboardStore((s) => s.getRecordContent);
@@ -65,6 +70,16 @@ function ClipboardCardInner({
   const isTextExpanded = canToggleText && textExpanded;
 
   // Close context menu on outside click / ESC
+  useLayoutEffect(() => {
+    if (!ctxMenu || !ctxRef.current) return;
+    // The card's transform/content containment clips fixed descendants. Keep
+    // the portal in viewport coordinates and fit the real menu at every edge.
+    const margin = 8;
+    const x = Math.max(margin, Math.min(ctxMenu.x, window.innerWidth - ctxRef.current.offsetWidth - margin));
+    const y = Math.max(margin, Math.min(ctxMenu.y, window.innerHeight - ctxRef.current.offsetHeight - margin));
+    if (x !== ctxMenu.x || y !== ctxMenu.y) setCtxMenu({ x, y });
+  }, [ctxMenu]);
+
   useEffect(() => {
     if (!ctxMenu) return;
     const handler = (e: MouseEvent) => {
@@ -188,7 +203,7 @@ function ClipboardCardInner({
       setCtxMenu(null);
       const newValue = !record.user_api_key;
       try {
-        await invoke("set_user_api_key", { id: record.id, value: newValue });
+        await invokeStorage("set_user_api_key", { id: record.id, value: newValue });
         await loadRecords();
       } catch {
         // ignore
@@ -203,9 +218,10 @@ function ClipboardCardInner({
       setCtxMenu(null);
       if (!record.label) return;
       try {
+        const epoch = await getStorageIdentity();
         const content = await getRecordContent(record);
         const text = `# ${record.label.service} — ${record.label.api_base}\n${content}`;
-        await navigator.clipboard.writeText(text);
+        await invokeStorage("copy_text", { text }, epoch);
       } catch {
         // Fallback: silently ignore; user can use regular copy
       }
@@ -384,7 +400,11 @@ function ClipboardCardInner({
       </div>
 
       {/* Context menu */}
-      {ctxMenu && (
+      {captureError && <div role="alert" className="notes-capture-error" onClick={(event) => event.stopPropagation()}>
+        {t(captureError, { defaultValue: t("notes.saveFailed") })}
+        <button onClick={() => setCaptureError(null)}>{t("notes.dismiss")}</button>
+      </div>}
+      {ctxMenu && createPortal(
         <div
           ref={ctxRef}
           className="clipboard-ctx-menu"
@@ -403,6 +423,16 @@ function ClipboardCardInner({
                 : t("clipboard.addFavoriteNote")}
             </button>
           )}
+          {!record.is_api_key && !record.user_api_key && SELECTABLE_TEXT_TYPES.has(record.type) && <button className="ctx-menu-item" disabled={capturing} onClick={() => {
+            if (captureFlight.current) return;
+            captureFlight.current = true; setCapturing(true); setCaptureError(null);
+            void import("../../lib/noteActions").then(({ captureNote }) => captureNote(record.id)).then((id) => {
+              setCtxMenu(null); window.dispatchEvent(new CustomEvent("open-note", { detail: { id } }));
+            }).catch((error: unknown) => {
+              const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "notes.saveFailed";
+              setCaptureError(code);
+            }).finally(() => { captureFlight.current = false; setCapturing(false); });
+          }}><EditNoteRoundedIcon />{t(capturing ? "notes.capturing" : "notes.capture")}</button>}
           <div className="ctx-menu-sep" />
           {record.is_api_key && (
             <button
@@ -424,7 +454,7 @@ function ClipboardCardInner({
             <button className="ctx-menu-item" onClick={(event) => {
               event.stopPropagation();
               setCtxMenu(null);
-              invoke("paste_text", { text: record.label!.api_base }).catch(console.error);
+              invokeStorage("paste_text", { text: record.label!.api_base }).catch(console.error);
             }}>
               {t("clipboard.pasteApiBase")}
             </button>
@@ -435,7 +465,7 @@ function ClipboardCardInner({
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
-              复制含注释
+              {t("clipboard.copyWithComment")}
             </button>
           )}
           {record.type === "text" && !record.is_api_key && (
@@ -444,7 +474,7 @@ function ClipboardCardInner({
                 <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
                 <line x1="7" y1="7" x2="7.01" y2="7" />
               </svg>
-              标记为 API Key
+              {t("clipboard.markApiKey")}
             </button>
           )}
           {record.user_api_key && (
@@ -453,7 +483,7 @@ function ClipboardCardInner({
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
-              取消 API Key 标记
+              {t("clipboard.unmarkApiKey")}
             </button>
           )}
           {(record.is_api_key || (record.type === "text" && !record.is_api_key)) && <div className="ctx-menu-sep" />}
@@ -469,7 +499,7 @@ function ClipboardCardInner({
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
             </svg>
-            粘贴
+            {t("clipboard.paste")}
           </button>
           <div className="ctx-menu-sep" />
           <button
@@ -484,9 +514,9 @@ function ClipboardCardInner({
               <polyline points="3 6 5 6 21 6" />
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
             </svg>
-            删除
+            {t("common.delete")}
           </button>
-        </div>
+        </div>, document.body
       )}
     </div>
   );

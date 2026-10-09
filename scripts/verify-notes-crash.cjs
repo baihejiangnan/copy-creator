@@ -1,0 +1,33 @@
+// Acknowledged WAL/FULL data after actual process kill; no unconfirmed zero-loss claim.
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const {spawn,execFileSync}=require('node:child_process'),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),wait=ms=>new Promise(r=>setTimeout(r,ms));
+const root=path.resolve(__dirname,'../output/optimization/QA-notes-20261007');
+(async()=>{
+ const metadata=path.join(root,'process.json');let info=JSON.parse(fs.readFileSync(metadata,'utf8').replace(/^\uFEFF/,''));assert.equal(info.identifier,'com.copycreator.qa20261007');assert.equal(info.nativeArtifact,'native-release-notes-scrollbars');assert.equal(info.profile,'release-default');assert.equal(info.synchronous,'FULL');assert.equal(crypto.createHash('sha256').update(fs.readFileSync(info.exe)).digest('hex'),info.sha256.toLowerCase());
+ let browser=await chromium.connectOverCDP(process.env.QA_CDP_URL),page;const select=async()=>{for(let i=0;i<100;i++){for(const p of browser.contexts().flatMap(c=>c.pages()).filter(p=>p.url()==='http://tauri.localhost/'))if(await p.evaluate(()=>performance.timeOrigin).catch(()=>0)>=info.launchStartedUnixMs-200){page=p;return}await wait(100)}throw Error('Fresh QA WebView missing')};await select();
+ const invoke=(command,args={})=>page.evaluate(({command,args})=>window.__TAURI_INTERNALS__.invoke(command,args),{command,args});
+ // Start-Process descendants can keep inherited pipe handles open after the
+ // launcher exits. Its exit, not pipe EOF, is the bounded helper completion.
+ const helper=file=>new Promise((resolve,reject)=>{
+  const start=Date.now(),child=spawn(process.env.QA_POWERSHELL,['-NoProfile','-File',path.join(__dirname,file),'-Metadata',metadata],{windowsHide:true,stdio:['ignore','pipe','pipe']});let stdout='',stderr='',timedOut=false;
+  console.log(JSON.stringify({helperStarted:file}));const timer=setTimeout(()=>{timedOut=true;child.kill()},60000);
+  child.stdout.on('data',data=>stdout+=data);child.stderr.on('data',data=>stderr+=data);
+  child.on('error',error=>{clearTimeout(timer);reject(error)});
+  child.on('exit',code=>{clearTimeout(timer);child.stdout.destroy();child.stderr.destroy();const result={helper:file,elapsedMs:Date.now()-start,exitCode:code,timedOut};(report.helperResults??=[]).push(result);console.log(JSON.stringify(result));code===0&&!timedOut?resolve(stdout):reject(Error(file+': helper failed; '+stderr))});
+ });
+ assert.equal(require('./qa-path.cjs')(await invoke('get_storage_path')),require('./qa-path.cjs')(info.storageRoot));
+ const id=crypto.randomUUID(),body='QA acknowledged before crash 中文😀\r\n  raw spaces\r final  ',unconfirmed='QA unconfirmed JS draft '+crypto.randomUUID(),destination=path.join(root,'reports','notes-crash-'+Date.now()+'.json'),report={started:new Date().toISOString(),app:info,scope:'Actual default process kill after acknowledged coordinator save, then same EXE/storage relaunch and native read. Newer JS draft is deliberately held before transport acceptance; its durable survival is not promised or tested as a requirement. Not OS power loss, hardware sync failure or a true full disk.'};let created=false;
+ try{
+  let epoch=await invoke('get_storage_epoch');await invoke('plugin:window|show',{label:'main'});await invoke('plugin:window|set_focus',{label:'main'});await page.locator('.sidebar-nav').getByRole('button',{name:/^(便签|Notes)$/}).click();await page.waitForFunction(()=>performance.getEntriesByType('resource').some(e=>/\/notesWorkspace-[^/]+\.js$/.test(e.name)));
+  await invoke('create_note',{expectedStorageEpoch:epoch,id,mutationId:crypto.randomUUID(),draft:{title:'QA acknowledged crash '+id,body:'QA before confirmed edit',refs:[]}});created=true;
+  report.before=await page.evaluate(async({id,body,unconfirmed})=>{const e=performance.getEntriesByType('resource').find(e=>/\/notesWorkspace-[^/]+\.js$/.test(e.name));const workspace=(await import(e.name)).useNotesWorkspace;await workspace.getState().initialize();await workspace.getState().open(id);const c=workspace.getState().coordinator;c.edit(id,{body});await c.flush(id);const acknowledged=c.getSession(id);if(acknowledged.status!=='saved'||acknowledged.draft.body!==body)throw Error('Actual save not acknowledged');c.transport=()=>new Promise(()=>{});c.edit(id,{body:unconfirmed});return {acknowledgedStatus:acknowledged.status,acknowledgedRevision:acknowledged.revision,unconfirmedStatus:c.getSession(id).status,unconfirmedPending:c.hasPending,acknowledgedAtUnixMs:Date.now()};},{id,body,unconfirmed});assert.equal(report.before.unconfirmedPending,true);
+  report.noteId=id;fs.writeFileSync(destination,JSON.stringify(report,null,2));
+  report.crash=JSON.parse((await helper('crash-saved-qa.ps1')).trim());await browser.close().catch(()=>{});await wait(1500);await helper('launch-saved-qa.ps1');const oldPid=info.pid;info=JSON.parse(fs.readFileSync(metadata,'utf8').replace(/^\uFEFF/,''));assert.notEqual(info.pid,oldPid);assert.equal(info.sha256,report.app.sha256);browser=await chromium.connectOverCDP(process.env.QA_CDP_URL);await select();assert.equal(require('./qa-path.cjs')(await invoke('get_storage_path')),require('./qa-path.cjs')(info.storageRoot));epoch=await invoke('get_storage_epoch');const saved=(await invoke('get_note',{expectedStorageEpoch:epoch,id})).value;assert.equal(saved.body,body);assert.equal(saved.revision,report.before.acknowledgedRevision);assert.notEqual(saved.body,unconfirmed);report.reopened={oldPid,newPid:info.pid,sameBinaryHash:true,acknowledgedBodyExact:true,revision:saved.revision,unconfirmedNotClaimedSaved:true};report.passed=true;
+ }catch(error){report.error=error.stack||String(error);throw error}
+ finally{
+  try{if(created){const epoch=await invoke('get_storage_epoch'),note=(await invoke('get_note',{expectedStorageEpoch:epoch,id})).value;await invoke('set_note_state',{expectedStorageEpoch:epoch,id,expectedRevision:note.revision,mutationId:crypto.randomUUID(),action:'delete'});execFileSync(process.env.QA_PYTHON,[path.join(__dirname,'qa-storage-fixture.py')],{input:JSON.stringify({action:'remove_crash_note',database:path.join(info.storageRoot,'data.db'),id}),encoding:'utf8',env:{...process.env,PYTHONUTF8:'1'},windowsHide:true});}report.fixtureRemoved=true;}
+  catch(e){report.cleanupError=e.message||String(e);report.passed=false;}
+  finally{report.finished=new Date().toISOString();fs.writeFileSync(destination,JSON.stringify(report,null,2));await browser.close().catch(()=>{});console.log(JSON.stringify({passed:report.passed||false,report:destination}));}
+ }
+ assert.equal(report.passed,true,'Crash acceptance or fixture cleanup failed');
+})().catch(e=>{console.error(e.stack||String(e));process.exitCode=1});

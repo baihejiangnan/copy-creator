@@ -66,7 +66,7 @@ pub fn toggle_window(app: &AppHandle) {
 
         if visible && !minimized {
             log::info!("[toggle_window] hiding window");
-            let _ = window.hide();
+            let _ = crate::lifecycle::hide_main(&window);
         } else {
             // Restore from minimized state before showing
             if minimized {
@@ -85,7 +85,7 @@ pub fn toggle_window(app: &AppHandle) {
             }
 
             log::info!("[toggle_window] showing window");
-            let _ = window.show();
+            let _ = crate::lifecycle::show_main(&window);
             let _ = window.set_focus();
         }
     } else {
@@ -259,25 +259,95 @@ pub fn update_shortcut(
     old_shortcut: String,
     new_shortcut: String,
 ) -> Result<(), String> {
-    if !old_shortcut.is_empty() {
-        let _ = unregister_keyboard_shortcut(&app, &old_shortcut);
-    }
+    if old_shortcut == new_shortcut { return Ok(()); }
     if !new_shortcut.is_empty() {
         register_keyboard_shortcut(&app, &new_shortcut)
             .map_err(|e| format!("Failed to register shortcut: {}", e))?;
     }
+    if !old_shortcut.is_empty() {
+        let _ = unregister_keyboard_shortcut(&app, &old_shortcut);
+    }
+    Ok(())
+}
+
+fn change_shortcut(
+    old: &str, new: &str,
+    register: impl Fn(&str) -> Result<(), String>,
+    unregister: impl Fn(&str),
+    persist: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if old == new { return Ok(()); }
+    if !new.is_empty() { register(new).map_err(|_| "settings.shortcutUnavailable")?; }
+    if let Err(error) = persist() {
+        if !new.is_empty() { unregister(new); }
+        return Err(error);
+    }
+    if !old.is_empty() { unregister(old); }
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_radial_menu_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
-    RADIAL_MENU_ENABLED.store(enabled, Ordering::SeqCst);
+pub fn save_shortcut(app: AppHandle, new_shortcut: String, expected_storage_epoch: Option<u64>) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    crate::db::require_storage_epoch(&app, expected_storage_epoch)?;
+    let old = crate::db::get_setting(app.clone(), "shortcut_key".into())?;
+    change_shortcut(&old, &new_shortcut,
+        |key| register_keyboard_shortcut(&app, key).map_err(|_| "settings.shortcutUnavailable".into()),
+        |key| { let _ = unregister_keyboard_shortcut(&app, key); },
+        || crate::db::set_setting(app.clone(), "shortcut_key".into(), new_shortcut.clone(), expected_storage_epoch))
+}
+
+#[tauri::command]
+pub fn set_radial_menu_enabled(app: AppHandle, enabled: bool, expected_storage_epoch: Option<u64>) -> Result<(), String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    crate::db::require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<crate::db::DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO settings (key, value) VALUES ('radial_menu_enabled', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1",
         rusqlite::params![if enabled { "1" } else { "0" }],
     ).map_err(|e| e.to_string())?;
+    RADIAL_MENU_ENABLED.store(enabled, Ordering::SeqCst);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn shortcut_conflict_keeps_old_registration_and_setting() {
+        let calls = RefCell::new(Vec::new());
+        let result = change_shortcut("Alt+V", "Ctrl+K",
+            |_| Err("occupied".into()),
+            |key| calls.borrow_mut().push(format!("unregister:{key}")),
+            || { calls.borrow_mut().push("persist".into()); Ok(()) });
+        assert_eq!(result, Err("settings.shortcutUnavailable".into()));
+        assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn shortcut_persistence_failure_rolls_back_new_registration() {
+        let calls = RefCell::new(Vec::new());
+        let result = change_shortcut("Alt+V", "Ctrl+K",
+            |key| { calls.borrow_mut().push(format!("register:{key}")); Ok(()) },
+            |key| calls.borrow_mut().push(format!("unregister:{key}")),
+            || Err("database unavailable".into()));
+        assert!(result.is_err());
+        assert_eq!(*calls.borrow(), ["register:Ctrl+K", "unregister:Ctrl+K"]);
+    }
+
+    #[test]
+    fn shortcut_success_persists_before_removing_old_registration() {
+        let calls = RefCell::new(Vec::new());
+        change_shortcut("Alt+V", "Ctrl+K",
+            |key| { calls.borrow_mut().push(format!("register:{key}")); Ok(()) },
+            |key| calls.borrow_mut().push(format!("unregister:{key}")),
+            || { calls.borrow_mut().push("persist".into()); Ok(()) }).unwrap();
+        assert_eq!(*calls.borrow(), ["register:Ctrl+K", "persist", "unregister:Alt+V"]);
+    }
 }
 

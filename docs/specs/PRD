@@ -1,3 +1,5 @@
+历史初稿（保留原始需求）：当前需求见 PRD.md，两个任务与状态见 ../TODO.md，便签和优化设计见 ../features/notes-design.md 与 ../features/performance-design.md。下文不是当前实现或待办清单。
+
 产品名称：Copy creator
 产品简介：一款PC端应用，辅助工具。包含剪切板、快捷短语、翻译功能。
 

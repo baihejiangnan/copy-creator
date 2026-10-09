@@ -1,6 +1,6 @@
 use std::io::Write;
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 fn is_url(text: &str) -> bool {
@@ -665,6 +665,7 @@ fn import_image_file(app: &AppHandle, file_path: &str) -> bool {
         return false;
     };
     crate::paste::cache_image(
+        app,
         stored.relative_path.clone(),
         stored.rgba,
         stored.width,
@@ -988,6 +989,11 @@ mod dedupe_tests {
 /// Re-copying exact content within the configured window moves its existing
 /// record to the top, preserving favorites, notes and API key labels.
 fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
+    if record_type=="image" {
+        if let Err(error)=crate::db::refresh_image_asset(app,content) {
+            log::warn!("image accounting update failed: {error}"); return;
+        }
+    }
     let now = chrono::Utc::now();
     let window_seconds = crate::db::get_setting_sync(app, "dedupe_window_seconds")
         .and_then(|value| value.parse::<i64>().ok())
@@ -1021,7 +1027,7 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
         found
     };
     if duplicate_id.is_some() {
-        let _ = app.emit("clipboard-refresh", ());
+        let _ = crate::storage_events::emit(app,"clipboard-refresh", ());
         crate::db::increment_unread_if_hidden(app);
         maybe_show_clipboard_notification(app, record_type, content);
         crate::tray::schedule_tray_refresh(app);
@@ -1060,7 +1066,7 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
             let guess = crate::db::guess_service(content).map(|s| s.to_string());
             if !crate::db::is_toast_shown_internal(app, &preview) {
                 crate::db::mark_toast_shown_internal(app, &preview);
-                app.emit(
+                crate::storage_events::emit(app,
                     "api-key-detected",
                     serde_json::json!({
                         "record_id": id,
@@ -1081,7 +1087,7 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
         make_text_event_content(record_type, content)
     };
 
-    app.emit(
+    crate::storage_events::emit(app,
         "clipboard-update",
         serde_json::json!({
             "id": id,
@@ -1103,9 +1109,6 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
 
     crate::db::increment_unread_if_hidden(app);
     maybe_show_clipboard_notification(app, record_type, content);
-    if let Err(error) = crate::db::enforce_clipboard_limits(app) {
-        log::warn!("clipboard limit enforcement failed: {error}");
-    }
     crate::tray::schedule_tray_refresh(app);
 }
 
@@ -1129,7 +1132,22 @@ pub fn sync_monitor_cache(handle: &AppHandle) {
     sync_monitor_cache_from_snapshot(text.as_deref());
 }
 
+// Serialize our private clipboard transaction against the monitor's text snapshot.
+// PASTING alone can change after the worker checks it, before a native write closes.
+pub(crate) fn capture_guard() -> std::sync::MutexGuard<'static, ()> {
+    static CAPTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    CAPTURE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    struct LimitCleanup<'a>(&'a AppHandle);
+    impl Drop for LimitCleanup<'_> {
+        fn drop(&mut self) {
+            if let Err(error) = crate::db::enforce_clipboard_limits(self.0) {
+                log::warn!("clipboard limit enforcement failed: {error}");
+            }
+        }
+    }
     let handle = app.clone();
 
     {
@@ -1154,13 +1172,17 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     }
 
     std::thread::spawn(move || {
-        let mut poll_count: u32 = 0;
+        let mut wake = crate::clipboard_wake::ClipboardWake::new();
+        let startup = std::time::Instant::now();
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            poll_count += 1;
+            wake.wait();
+            let lifecycle = handle.state::<crate::lifecycle::LifecycleState>();
+            let Some(_producer) = lifecycle.try_producer() else { continue; };
+            let capture = capture_guard();
 
-            // Skip first 2 polls (1.6s) to avoid recording startup clipboard state
-            if poll_count <= 2 {
+            // Time-based suppression preserves the original 1.6s startup policy;
+            // event bursts must not consume it as if they were two polling ticks.
+            if startup.elapsed() < std::time::Duration::from_millis(1600) {
                 sync_monitor_cache(&handle);
                 continue;
             }
@@ -1176,6 +1198,11 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 #[cfg(target_os = "windows")]
                 {
                     let current_seq = get_clipboard_sequence();
+                    if current_seq != 0 && current_seq == crate::paste::sensitive_clipboard_sequence() {
+                        // Vault copies must never become persistent clipboard history.
+                        LAST_CLIPBOARD_SEQ.store(current_seq, Ordering::SeqCst);
+                        continue;
+                    }
                     let last_seq = LAST_CLIPBOARD_SEQ.load(Ordering::SeqCst);
                     if current_seq != last_seq {
                         LAST_CLIPBOARD_SEQ.store(current_seq, Ordering::SeqCst);
@@ -1194,7 +1221,13 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 continue;
             }
 
+            // Drop order releases image activity before cleanup can reclaim a
+            // file, while the accepted lifecycle producer remains held.
+            let _cleanup = LimitCleanup(&handle);
+            let _activity = crate::db::image_activity();
+
             let text_candidate = read_clipboard_text_candidate(&handle);
+            drop(capture);
             if let Some((text, has_spreadsheet_format)) = text_candidate.as_ref() {
                 if should_prefer_text_over_image(text, *has_spreadsheet_format) {
                     *LAST_CLIPBOARD_TEXT.lock().unwrap() = text.clone();
@@ -1265,6 +1298,7 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                             stored.relative_path
                         );
                         crate::paste::cache_image(
+                            &handle,
                             stored.relative_path.clone(),
                             stored.rgba,
                             stored.width,
@@ -1292,6 +1326,7 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                                 source_bytes,
                             ) {
                                 crate::paste::cache_image(
+                                    &handle,
                                     stored.relative_path.clone(),
                                     stored.rgba,
                                     stored.width,

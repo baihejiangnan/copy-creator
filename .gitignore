@@ -3,3 +3,10 @@ releases/
 .claude/settings.local.json
 .agents/
 copy-creator/com.copycreator.app/
+output/playwright/
+.playwright-cli/
+output/optimization/
+
+# Local Python validation caches
+__pycache__/
+*.py[cod]

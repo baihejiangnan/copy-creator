@@ -1,322 +1,174 @@
+import { invokeStorage } from "../lib/storageIdentity";
+import "../styles/settings.css";
 import { useState, useEffect, useRef, useCallback } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
-import {
-  StorageSection,
-  ClipboardSection,
-  ImageSection,
-  DataSection,
-  LanguageSection,
-  ShortcutSection,
-  TranslationSection,
-  StartupSection,
-} from "./settings";
+import { useSettingsEditorStore } from "../stores/settingsEditorStore";
+import type { SettingField } from "../stores/settingsEditorStore";
+import { StorageSection, ClipboardSection, ImageSection, DataSection, LanguageSection,
+  ShortcutSection, TranslationSection, StartupSection, RetentionSection } from "./settings";
 import type { ClipboardStorageStats } from "./settings";
+import { UpdateSection } from "./settings/UpdateSection";
+import { useUpdateStore } from "../stores/updateStore";
+import SettingsSaveStatus from "./SettingsSaveStatus";
 
-interface Props {
-  embedded?: boolean;
-}
+const SETTINGS_TABS = ["general", "clipboard", "translation", "data", "updates"] as const;
+type SettingsTab = typeof SETTINGS_TABS[number];
 
-export default function SettingsContent({ embedded }: Props) {
+export default function SettingsContent({ embedded }: { embedded?: boolean }) {
   const { i18n, t } = useTranslation();
   const settings = useSettingsStore();
-
-  const [localRetention, setLocalRetention] = useState(settings.clipboardRetention);
-  const [localDedupeWindow, setLocalDedupeWindow] = useState(settings.dedupeWindowSeconds);
-  const [localEngine, setLocalEngine] = useState(settings.defaultEngine);
-  const [localApiUrl, setLocalApiUrl] = useState(settings.apiUrl);
-  const [localApiKey, setLocalApiKey] = useState(settings.apiKey);
-  const [localModel, setLocalModel] = useState(settings.model);
-  const [localGoogleApiKey, setLocalGoogleApiKey] = useState(settings.googleApiKey);
-  const [localTranslateProxy, setLocalTranslateProxy] = useState(settings.translateProxy);
-  const [localLang, setLocalLang] = useState(i18n.language);
-  const [localShortcutKey, setLocalShortcutKey] = useState(settings.shortcutKey);
-  const [localRadialMenuEnabled, setLocalRadialMenuEnabled] = useState(settings.radialMenuEnabled);
-  const [localAutostart, setLocalAutostart] = useState(settings.autostartEnabled);
-  const [localMaxHistoryItems, setLocalMaxHistoryItems] = useState(settings.maxHistoryItems);
-  const [localMaxStorageMb, setLocalMaxStorageMb] = useState(settings.maxStorageMb);
-  const [localImageMaxDimension, setLocalImageMaxDimension] = useState(settings.imageMaxDimension);
-  const [localImageCompressionQuality, setLocalImageCompressionQuality] = useState(settings.imageCompressionQuality);
-  const [localLargeImageHandling, setLocalLargeImageHandling] = useState(settings.largeImageHandling);
-  const [localClipboardNotifications, setLocalClipboardNotifications] = useState(settings.clipboardNotifications);
+  const editor = useSettingsEditorStore();
+  const values = editor.values;
   const [storageStats, setStorageStats] = useState<ClipboardStorageStats | null>(null);
-  const [recording, setRecording] = useState(false);
-  const recordingRef = useRef(false);
-  const keydownHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
   const [storagePath, setStoragePath] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const categoryBodyRef = useRef<HTMLFieldSetElement>(null);
+  const keydownHandlerRef = useRef<((event: KeyboardEvent) => void) | null>(null);
 
   const loadStorageStats = useCallback(async () => {
-    try {
-      setStorageStats(await invoke<ClipboardStorageStats>("get_clipboard_storage_stats"));
-    } catch (e) {
-      console.error("Failed to load clipboard storage stats:", e);
-    }
+    try { setStorageStats(await invoke<ClipboardStorageStats>("get_clipboard_storage_stats")); }
+    catch (error) { console.error("Failed to load storage stats:", error); }
   }, []);
 
   useEffect(() => {
-    settings.loadSettings();
-    invoke<string>("get_storage_path").then(setStoragePath).catch(console.error);
-    invoke<ClipboardStorageStats>("get_clipboard_storage_stats")
-      .then(setStorageStats)
-      .catch(console.error);
+    void useSettingsEditorStore.getState().initialize();
+    void invoke<string>("get_storage_path").then(setStoragePath).catch(console.error);
+    const onHidden = () => { if (document.hidden) void useSettingsEditorStore.getState().commitAll(); };
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      document.removeEventListener("visibilitychange", onHidden);
+      if (keydownHandlerRef.current) document.removeEventListener("keydown", keydownHandlerRef.current, true);
+      void useSettingsEditorStore.getState().commitAll();
+    };
   }, []);
 
   useEffect(() => {
-    setLocalRetention(settings.clipboardRetention);
-    setLocalDedupeWindow(settings.dedupeWindowSeconds);
-    setLocalEngine(settings.defaultEngine);
-    setLocalApiUrl(settings.apiUrl);
-    setLocalApiKey(settings.apiKey);
-    setLocalModel(settings.model);
-    setLocalGoogleApiKey(settings.googleApiKey);
-    setLocalTranslateProxy(settings.translateProxy);
-    setLocalLang(i18n.language);
-    setLocalShortcutKey(settings.shortcutKey);
-    setLocalRadialMenuEnabled(settings.radialMenuEnabled);
-    setLocalAutostart(settings.autostartEnabled);
-    setLocalMaxHistoryItems(settings.maxHistoryItems);
-    setLocalMaxStorageMb(settings.maxStorageMb);
-    setLocalImageMaxDimension(settings.imageMaxDimension);
-    setLocalImageCompressionQuality(settings.imageCompressionQuality);
-    setLocalLargeImageHandling(settings.largeImageHandling);
-    setLocalClipboardNotifications(settings.clipboardNotifications);
-  }, [settings, i18n.language]);
+    let disposed = false;
+    void invoke<ClipboardStorageStats>("get_clipboard_storage_stats")
+      .then((stats) => { if (!disposed) setStorageStats(stats); }).catch(console.error);
+    return () => { disposed = true; };
+  }, [settings.maxHistoryItems, settings.maxStorageMb]);
 
+  const stopRecording = () => {
+    setRecording(false);
+    if (keydownHandlerRef.current) document.removeEventListener("keydown", keydownHandlerRef.current, true);
+    keydownHandlerRef.current = null;
+  };
   const startRecording = () => {
-    recordingRef.current = true;
-    setRecording(true);
-    setLocalShortcutKey("");
-
-    const cleanup = () => {
-      document.removeEventListener("keydown", handler, true);
-      keydownHandlerRef.current = null;
+    stopRecording(); setRecording(true);
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); stopRecording(); return; }
+      if (["Control", "Alt", "Shift", "Meta", "CapsLock", "NumLock", "ScrollLock", "Dead"].includes(event.key)
+        || (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey)) return;
+      event.preventDefault(); event.stopPropagation();
+      const parts = [];
+      if (event.ctrlKey) parts.push("Ctrl");
+      if (event.altKey) parts.push("Alt");
+      if (event.shiftKey) parts.push("Shift");
+      if (event.metaKey) parts.push("Super");
+      const key = event.code.startsWith("Key") ? event.code[3] : event.code.startsWith("Digit") ? event.code[5]
+        : event.code.startsWith("Numpad") ? `NumPad${event.code.substring(6)}` : event.key === " " ? "Space" : event.key;
+      parts.push(key); stopRecording();
+      useSettingsEditorStore.getState().change("shortcut_key", parts.join("+"));
     };
-
-    const handler = (e: KeyboardEvent) => {
-      if (!recordingRef.current) {
-        cleanup();
-        return;
-      }
-
-      // Ignore modifier-only presses
-      if (["Control", "Alt", "Shift", "Meta", "CapsLock", "NumLock", "ScrollLock", "Dead"].includes(e.key)) {
-        return;
-      }
-
-      // Require at least one modifier
-      if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-        return;
-      }
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      const parts: string[] = [];
-      if (e.ctrlKey) parts.push("Ctrl");
-      if (e.altKey) parts.push("Alt");
-      if (e.shiftKey) parts.push("Shift");
-      if (e.metaKey) parts.push("Super");
-
-      // Map physical key code to layout-independent name
-      const code = e.code;
-      let keyName: string;
-      if (code.startsWith("Key")) {
-        keyName = code[3]; // KeyA → A
-      } else if (code.startsWith("Digit")) {
-        keyName = code[5]; // Digit1 → 1
-      } else if (code.startsWith("Numpad")) {
-        keyName = "NumPad" + code.substring(6);
-      } else {
-        keyName = e.key;
-        if (keyName === " ") keyName = "Space";
-      }
-      parts.push(keyName);
-
-      const shortcut = parts.join("+");
-      setLocalShortcutKey(shortcut);
-      recordingRef.current = false;
-      setRecording(false);
-      cleanup();
-    };
-
     keydownHandlerRef.current = handler;
     document.addEventListener("keydown", handler, true);
   };
 
-  const stopRecording = () => {
-    recordingRef.current = false;
-    setRecording(false);
-    if (keydownHandlerRef.current) {
-      document.removeEventListener("keydown", keydownHandlerRef.current, true);
-      keydownHandlerRef.current = null;
-    }
-  };
-
-  const handleSave = async () => {
-    const maxHistoryItems = Math.min(100000, Math.max(100, Math.round(localMaxHistoryItems || 2000)));
-    const maxStorageMb = Math.min(100000, Math.max(50, Math.round(localMaxStorageMb || 500)));
-    setLocalMaxHistoryItems(maxHistoryItems);
-    setLocalMaxStorageMb(maxStorageMb);
-
-    await settings.setSettingsBatch({
-      clipboard_retention: localRetention,
-      dedupe_window_seconds: String(localDedupeWindow),
-      default_translate_engine: localEngine,
-      ai_api_url: localApiUrl,
-      ai_model: localModel,
-      translate_proxy: localTranslateProxy,
-      language: localLang,
-      max_history_items: String(maxHistoryItems),
-      max_storage_mb: String(maxStorageMb),
-      image_max_dimension: String(localImageMaxDimension),
-      image_compression_quality: String(localImageCompressionQuality),
-      large_image_handling: localLargeImageHandling,
-      clipboard_notifications: localClipboardNotifications ? "1" : "0",
-    });
-
-    if (localApiKey) await settings.setSetting("ai_api_key", localApiKey);
-    if (localGoogleApiKey) await settings.setSetting("google_api_key", localGoogleApiKey);
-    setLocalApiKey("");
-    setLocalGoogleApiKey("");
-
-    const oldKey = settings.shortcutKey;
-    const newKey = localShortcutKey;
-    if (oldKey !== newKey) {
-      try {
-        await invoke("update_shortcut", { oldShortcut: oldKey, newShortcut: newKey });
-        await settings.setSetting("shortcut_key", newKey);
-      } catch (e) {
-        console.error("Failed to update shortcut:", e);
-      }
-    }
-
-    try {
-      await invoke("set_radial_menu_enabled", { enabled: localRadialMenuEnabled });
-    } catch (e) {
-      console.error("Failed to set radial menu enabled:", e);
-    }
-
-    await settings.setAutostart(localAutostart);
-    await loadStorageStats();
-
-    if (localLang !== i18n.language) {
-      i18n.changeLanguage(localLang);
-      emit("language-changed", { language: localLang });
-      invoke("update_tray_language").catch(console.error);
-    }
-
-    await settings.loadSettings();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
+  const change = (field: SettingField) => (value: string) => editor.change(field, value);
+  const toggle = (field: SettingField) => (enabled: boolean) => editor.change(field, enabled ? "1" : "0");
+  const commit = (field: SettingField) => { void editor.commit(field); };
   const handleImported = async () => {
     const previousShortcut = settings.shortcutKey;
     await settings.loadSettings();
+    await useUpdateStore.getState().initialize(true);
     const imported = useSettingsStore.getState();
-    if (previousShortcut !== imported.shortcutKey) {
-      await invoke("update_shortcut", {
-        oldShortcut: previousShortcut,
-        newShortcut: imported.shortcutKey,
-      }).catch(console.error);
-    }
-    await invoke("set_radial_menu_enabled", {
-      enabled: imported.radialMenuEnabled,
+    if (previousShortcut !== imported.shortcutKey) await invoke("update_shortcut", {
+      oldShortcut: previousShortcut, newShortcut: imported.shortcutKey,
     }).catch(console.error);
+    await invokeStorage("set_radial_menu_enabled", { enabled: imported.radialMenuEnabled }).catch(console.error);
     if (imported.language !== i18n.language) {
       await i18n.changeLanguage(imported.language);
-      emit("language-changed", { language: imported.language });
-      invoke("update_tray_language").catch(console.error);
+      void emit("language-changed", { language: imported.language }).catch(console.error);
+      void invoke("update_tray_language").catch(console.error);
     }
+    await editor.initialize(true);
     await loadStorageStats();
   };
 
-  const content = (
-    <>
-      <StorageSection
-        storagePath={storagePath}
-        setStoragePath={setStoragePath}
-        localRetention={localRetention}
-        setLocalRetention={setLocalRetention}
-      />
-
-      <ClipboardSection
-        dedupeWindowSeconds={localDedupeWindow}
-        setDedupeWindowSeconds={setLocalDedupeWindow}
-        maxHistoryItems={localMaxHistoryItems}
-        setMaxHistoryItems={setLocalMaxHistoryItems}
-        maxStorageMb={localMaxStorageMb}
-        setMaxStorageMb={setLocalMaxStorageMb}
-        notifications={localClipboardNotifications}
-        setNotifications={setLocalClipboardNotifications}
-        stats={storageStats}
-        onCleanup={loadStorageStats}
-      />
-
-      <ImageSection
-        maxDimension={localImageMaxDimension}
-        setMaxDimension={setLocalImageMaxDimension}
-        compressionQuality={localImageCompressionQuality}
-        setCompressionQuality={setLocalImageCompressionQuality}
-        largeImageHandling={localLargeImageHandling}
-        setLargeImageHandling={setLocalLargeImageHandling}
-      />
-
-      <LanguageSection
-        localLang={localLang}
-        setLocalLang={setLocalLang}
-      />
-
-      <ShortcutSection
-        localShortcutKey={localShortcutKey}
-        setLocalShortcutKey={setLocalShortcutKey}
-        recording={recording}
-        startRecording={startRecording}
-        stopRecording={stopRecording}
-        localRadialMenuEnabled={localRadialMenuEnabled}
-        setLocalRadialMenuEnabled={setLocalRadialMenuEnabled}
-      />
-
-      <StartupSection
-        localAutostart={localAutostart}
-        setLocalAutostart={setLocalAutostart}
-      />
-
+  const categoryContent: Record<SettingsTab, ReactNode> = {
+    general: <>
+      <LanguageSection localLang={values.language} setLocalLang={change("language")} />
+      <StartupSection localAutostart={values.autostart === "1"} setLocalAutostart={toggle("autostart")} />
+      <ShortcutSection localShortcutKey={settings.shortcutKey} setLocalShortcutKey={change("shortcut_key")}
+        error={editor.errors.shortcut_key}
+        recording={recording} startRecording={startRecording} stopRecording={stopRecording}
+        localRadialMenuEnabled={values.radial_menu_enabled === "1"} setLocalRadialMenuEnabled={toggle("radial_menu_enabled")} />
+    </>,
+    clipboard: <>
+      <RetentionSection retention={values.clipboard_retention} setRetention={change("clipboard_retention")} />
+      <ClipboardSection dedupeWindowSeconds={Number(values.dedupe_window_seconds)}
+        setDedupeWindowSeconds={(value) => editor.change("dedupe_window_seconds", String(value))}
+        maxHistoryItems={values.max_history_items} setMaxHistoryItems={(value) => editor.edit("max_history_items", value)}
+        maxStorageMb={values.max_storage_mb} setMaxStorageMb={(value) => editor.edit("max_storage_mb", value)}
+        notifications={values.clipboard_notifications === "1"} setNotifications={toggle("clipboard_notifications")}
+        stats={storageStats} onCleanup={loadStorageStats} onCommit={commit} errors={editor.errors} />
+      <ImageSection maxDimension={Number(values.image_max_dimension)}
+        setMaxDimension={(value) => editor.change("image_max_dimension", String(value))}
+        compressionQuality={Number(values.image_compression_quality)}
+        setCompressionQuality={(value) => editor.edit("image_compression_quality", String(value))}
+        onCommitCompression={(value) => void editor.commit("image_compression_quality", String(value))}
+        largeImageHandling={values.large_image_handling} setLargeImageHandling={change("large_image_handling")} />
+    </>,
+    translation: <TranslationSection localEngine={values.default_translate_engine} setLocalEngine={change("default_translate_engine")}
+      localApiUrl={values.ai_api_url} setLocalApiUrl={(value) => editor.edit("ai_api_url", value)}
+      localApiKey={values.ai_api_key} setLocalApiKey={(value) => editor.edit("ai_api_key", value)}
+      apiKeyConfigured={settings.apiKeyConfigured} onClearApiKey={() => editor.clearSecret("ai_api_key")}
+      localModel={values.ai_model} setLocalModel={(value) => editor.edit("ai_model", value)}
+      localGoogleApiKey={values.google_api_key} setLocalGoogleApiKey={(value) => editor.edit("google_api_key", value)}
+      googleApiKeyConfigured={settings.googleApiKeyConfigured} onClearGoogleApiKey={() => editor.clearSecret("google_api_key")}
+      localTranslateProxy={values.translate_proxy} setLocalTranslateProxy={(value) => editor.edit("translate_proxy", value)}
+      onCommit={commit} errors={editor.errors} />,
+    data: <>
+      <StorageSection storagePath={storagePath} setStoragePath={setStoragePath} />
       <DataSection onImported={handleImported} />
+    </>,
+    updates: <UpdateSection />,
+  };
+  const selectTab = (tab: SettingsTab) => {
+    stopRecording(); void editor.commitAll(); setActiveTab(tab);
+    if (categoryBodyRef.current) categoryBodyRef.current.scrollTop = 0;
+  };
 
-      <TranslationSection
-        localEngine={localEngine}
-        setLocalEngine={setLocalEngine}
-        localApiUrl={localApiUrl}
-        setLocalApiUrl={setLocalApiUrl}
-        localApiKey={localApiKey}
-        apiKeyConfigured={settings.apiKeyConfigured}
-        onClearApiKey={() => { invoke("set_setting", { key: "ai_api_key", value: "" }).then(() => { setLocalApiKey(""); settings.loadSettings(); }).catch(console.error); }}
-        setLocalApiKey={setLocalApiKey}
-        localModel={localModel}
-        setLocalModel={setLocalModel}
-        localGoogleApiKey={localGoogleApiKey}
-        googleApiKeyConfigured={settings.googleApiKeyConfigured}
-        onClearGoogleApiKey={() => { invoke("set_setting", { key: "google_api_key", value: "" }).then(() => { setLocalGoogleApiKey(""); settings.loadSettings(); }).catch(console.error); }}
-        setLocalGoogleApiKey={setLocalGoogleApiKey}
-        localTranslateProxy={localTranslateProxy}
-        setLocalTranslateProxy={setLocalTranslateProxy}
-      />
-
-      <div className="settings-actions">
-        <button className={`settings-save-btn${saved ? " saved" : ""}`} onClick={handleSave}>
-          {saved ? t("common.saved") : t("common.save")}
-        </button>
+  return (
+    <div className={`settings-categorized${embedded ? " settings-panel-content" : ""}`}>
+      <div className="settings-tabs" role="tablist" aria-label={t("settings.title")}>
+        {SETTINGS_TABS.map((tab, index) => (
+          <button key={tab} id={`settings-tab-${tab}`} role="tab" aria-selected={activeTab === tab}
+            aria-controls={`settings-panel-${tab}`} className={`settings-tab${activeTab === tab ? " active" : ""}`}
+            tabIndex={activeTab === tab ? 0 : -1} onClick={() => selectTab(tab)}
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const next = event.key === "Home" ? SETTINGS_TABS[0] : event.key === "End" ? SETTINGS_TABS[SETTINGS_TABS.length - 1]
+                : SETTINGS_TABS[(index + (event.key === "ArrowRight" ? 1 : -1) + SETTINGS_TABS.length) % SETTINGS_TABS.length];
+              selectTab(next); document.getElementById(`settings-tab-${next}`)?.focus();
+            }}>{t(`settings.categories.${tab}`)}</button>
+        ))}
       </div>
-    </>
+      <SettingsSaveStatus />
+      <fieldset className="settings-category-body" ref={categoryBodyRef} disabled={!editor.initialized || editor.paused}>
+        {SETTINGS_TABS.map((tab) => (
+          <div key={tab} id={`settings-panel-${tab}`} role="tabpanel" aria-labelledby={`settings-tab-${tab}`} hidden={activeTab !== tab}>
+            {categoryContent[tab]}
+          </div>
+        ))}
+      </fieldset>
+    </div>
   );
-
-  if (embedded) {
-    return <div className="settings-panel-content">{content}</div>;
-  }
-
-  return content;
 }

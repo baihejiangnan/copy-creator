@@ -81,7 +81,7 @@ fn build_tray_menu(
         };
 
     let unread_count = crate::db::get_unread_count_sync(app);
-    let recent = crate::db::get_recent_clipboard_records(app, 8).unwrap_or_default();
+    let (epoch, recent) = crate::db::get_recent_clipboard_records(app, 8)?;
     let mut builder = MenuBuilder::new(app);
 
     if unread_count > 0 {
@@ -104,13 +104,13 @@ fn build_tray_menu(
         builder = builder.item(&empty);
     } else {
         for record in recent {
-            let copy = MenuItemBuilder::with_id(format!("tray-copy:{}", record.id), copy_text)
+            let copy = MenuItemBuilder::with_id(format!("tray-copy:{epoch}:{}", record.id), copy_text)
                 .build(app)?;
-            let paste = MenuItemBuilder::with_id(format!("tray-paste:{}", record.id), paste_text)
+            let paste = MenuItemBuilder::with_id(format!("tray-paste:{epoch}:{}", record.id), paste_text)
                 .build(app)?;
             let submenu = SubmenuBuilder::with_id(
                 app,
-                format!("tray-record:{}", record.id),
+                format!("tray-record:{epoch}:{}", record.id),
                 menu_title(&record, lang),
             )
             .item(&copy)
@@ -135,7 +135,7 @@ fn show_main_window(app: &AppHandle) {
         if window.is_minimized().unwrap_or(false) {
             let _ = window.unminimize();
         }
-        window.show().ok();
+        crate::lifecycle::show_main(&window).ok();
         window.set_focus().ok();
     }
 }
@@ -158,14 +158,14 @@ pub fn create_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
-            if let Some(record_id) = id.strip_prefix("tray-copy:") {
-                crate::paste::copy_record_by_id(app, record_id).ok();
-            } else if let Some(record_id) = id.strip_prefix("tray-paste:") {
-                crate::paste::paste_record_by_id(app, record_id).ok();
+            if let Some((epoch, record_id, paste_after)) = parse_record_action(id) {
+                crate::paste::run_record_action(app, epoch, record_id.to_string(), paste_after).ok();
             } else {
                 match id {
                     "show" => show_main_window(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        crate::lifecycle::request_exit(app, 0);
+                    }
                     _ => {}
                 }
             }
@@ -186,7 +186,7 @@ pub fn create_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         if window.is_minimized().unwrap_or(false) {
                             show_main_window(&app);
                         } else if window.is_visible().unwrap_or(false) {
-                            window.hide().ok();
+                            crate::lifecycle::hide_main(&window).ok();
                         } else {
                             show_main_window(&app);
                         }
@@ -254,4 +254,30 @@ pub fn schedule_tray_refresh(app: &AppHandle) {
 #[tauri::command]
 pub fn update_tray_language(app: AppHandle) -> Result<(), String> {
     refresh_tray_menu(&app)
+}
+
+// IDs carry the identity of the rows read under the same connection lock.
+// A still-open old menu must never resolve its record ID in a new database.
+fn parse_record_action(id: &str) -> Option<(u64, &str, bool)> {
+    let (rest, paste_after) = if let Some(rest) = id.strip_prefix("tray-copy:") {
+        (rest, false)
+    } else {
+        (id.strip_prefix("tray-paste:")?, true)
+    };
+    let (epoch, record_id) = rest.split_once(':')?;
+    if record_id.is_empty() { return None; }
+    Some((epoch.parse().ok()?, record_id, paste_after))
+}
+
+#[cfg(test)]
+mod action_identity_tests {
+    use super::parse_record_action;
+    #[test]
+    fn menu_actions_preserve_the_row_identity_and_reject_unstamped_ids() {
+        assert_eq!(parse_record_action("tray-copy:1:same-id"), Some((1, "same-id", false)));
+        assert_eq!(parse_record_action("tray-paste:2:same-id"), Some((2, "same-id", true)));
+        for id in ["tray-copy:same-id", "tray-paste:bad:same-id", "tray-copy:1:", "show", "quit"] {
+            assert_eq!(parse_record_action(id), None);
+        }
+    }
 }

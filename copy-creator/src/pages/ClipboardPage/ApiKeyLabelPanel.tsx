@@ -1,6 +1,6 @@
+import { invokeStorage, onStorageIdentity } from "../../lib/storageIdentity";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import type { ApiKeyLabel } from "../../types";
 import { useClipboardStore } from "../../stores/clipboardStore";
 
@@ -42,10 +42,13 @@ export default function ApiKeyLabelPanel({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    invoke<Service[]>("list_api_services")
-      .then(setSavedServices)
-      .catch((reason) => console.error("Failed to load API services:", reason));
-  }, []);
+    let cancelled = false;
+    const off = onStorageIdentity(() => { cancelled = true; onCancel(); });
+    invokeStorage<Service[]>("list_api_services")
+      .then((rows) => { if (!cancelled) setSavedServices(rows); })
+      .catch(() => {});
+    return () => { cancelled = true; off(); };
+  }, [onCancel]);
 
   const services = useMemo(() => {
     const options = new Map(SERVICE_TEMPLATES.map((item) => [item.name, item]));
@@ -81,7 +84,7 @@ export default function ApiKeyLabelPanel({
     setSaving(true);
     setError("");
     try {
-      await invoke("save_api_key_label", {
+      await invokeStorage("save_api_key_label", {
         recordId, keyPreview, service: name, apiBase: base, note: note.trim(),
       });
       updateRecordLabel(recordId, {
@@ -99,7 +102,7 @@ export default function ApiKeyLabelPanel({
   const handlePasteBase = async () => {
     if (!apiBase.trim()) return;
     try {
-      await invoke("paste_text", { text: apiBase.trim() });
+      await invokeStorage("paste_text", { text: apiBase.trim() });
       onCancel();
     } catch (reason) {
       setError(String(reason));

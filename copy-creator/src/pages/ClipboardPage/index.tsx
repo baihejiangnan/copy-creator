@@ -7,6 +7,7 @@ import { Icons } from "../../components/Icons";
 import SearchInput from "../../components/SearchInput";
 import { ClipboardCard } from "./ClipboardCard";
 import { TYPE_META } from "./utils";
+import { useWindowVisible } from "../../lib/documentVisible";
 
 TYPE_META.text.icon = Icons.clipboard;
 TYPE_META.image.icon = Icons.image;
@@ -18,6 +19,7 @@ const SCROLL_TOP_BUTTON_THRESHOLD = 180;
 
 export default function ClipboardPage() {
   const { t } = useTranslation();
+  const windowVisible = useWindowVisible();
   const {
     records,
     search,
@@ -133,7 +135,9 @@ export default function ClipboardPage() {
 
   useEffect(() => {
     init();
-  }, [init]);
+    useClipboardStore.getState().setVisible(windowVisible);
+    return () => useClipboardStore.getState().setVisible(false);
+  }, [init, windowVisible]);
 
   useEffect(() => {
     const timer = setTimeout(() => loadRecords(), 300);

@@ -1,11 +1,11 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function useHoverSwitch(
   onSwitch: (key: string) => void,
   delayMs: number = 2000
 ) {
   const onSwitchRef = useRef(onSwitch);
-  onSwitchRef.current = onSwitch;
+  useEffect(() => { onSwitchRef.current = onSwitch; }, [onSwitch]);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -22,6 +22,8 @@ export function useHoverSwitch(
       intervalRef.current = null;
     }
   }, []);
+
+  useEffect(() => clearTimers, [clearTimers]);
 
   const handleEnter = useCallback(
     (key: string) => {

@@ -152,6 +152,7 @@
 .notification {
   display: flex;
   flex-direction: row;
+  flex-shrink: 0;
   position: relative;
   width: 100%;
   background: var(--card-inner-bg);

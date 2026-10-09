@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeStorage, onStorageIdentity } from "../lib/storageIdentity";
+let generation = 0;
 
 interface TranslationResult {
   source_text: string;
@@ -32,20 +33,23 @@ export const useTranslationStore = create<TranslationState>((set, get) => ({
   setTargetLang: (lang: string) => set({ targetLang: lang }),
 
   translate: async () => {
+    const current = ++generation;
     const { inputText, targetLang } = get();
     if (!inputText.trim()) return;
 
     set({ loading: true, error: null });
     try {
-      const res = await invoke<TranslationResult>("translate", {
+      const res = await invokeStorage<TranslationResult>("translate", {
         text: inputText,
         targetLang,
       });
+      if (current !== generation) return;
       set({ result: res.target_text, engine: res.engine });
     } catch (e) {
-      set({ error: String(e) });
+      if (current === generation) set({ error: String(e) });
     } finally {
-      set({ loading: false });
+      if (current === generation) set({ loading: false });
     }
   },
 }));
+onStorageIdentity(() => { generation++; useTranslationStore.setState({ result: null, engine: null, error: null, loading: false }); });

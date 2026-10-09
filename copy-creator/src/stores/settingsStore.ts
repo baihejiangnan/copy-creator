@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { invokeStorage, onStorageIdentity } from "../lib/storageIdentity";
+let settingsGeneration = 0;
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 
 type ThemeMode = "light" | "dark";
@@ -66,13 +68,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const next = get().themeMode === "light" ? "dark" : "light";
     set({ themeMode: next });
     // Persist to DB so radial menu reads the correct theme on re-open
-    get().setSetting("theme", next);
+    get().setSetting("theme", next).catch((error) => {
+      console.error("Failed to save theme:", error);
+      if (get().themeMode === next) set({ themeMode: next === "light" ? "dark" : "light" });
+    });
     emit("theme-changed", { theme: next });
   },
 
   loadSettings: async () => {
+    const current = settingsGeneration;
     try {
       const settings = await invoke<Record<string, string>>("get_all_settings");
+      if (current !== settingsGeneration) return;
 
       set({
         themeMode: settings.theme === "dark" ? "dark" : "light",
@@ -110,31 +117,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setSetting: async (key: string, value: string) => {
-    try {
-      await invoke("set_setting", { key, value });
-    } catch (e) {
-      console.error("Failed to save setting:", e);
-    }
+    await invokeStorage("set_setting", { key, value });
   },
 
   setSettingsBatch: async (settings: Record<string, string>) => {
-    try {
-      await invoke("set_settings_batch", { settings });
-    } catch (e) {
-      console.error("Failed to batch save settings:", e);
-    }
+    await invokeStorage("set_settings_batch", { settings });
   },
 
   setAutostart: async (enabled: boolean) => {
-    try {
-      if (enabled) {
-        await enable();
-      } else {
-        await disable();
-      }
-      set({ autostartEnabled: enabled });
-    } catch (e) {
-      console.error("Failed to set autostart:", e);
-    }
+    if (enabled) await enable();
+    else await disable();
+    set({ autostartEnabled: enabled });
   },
 }));
+onStorageIdentity(() => { settingsGeneration++; void useSettingsStore.getState().loadSettings(); });

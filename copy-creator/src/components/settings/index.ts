@@ -6,6 +6,7 @@ import { StartupSection } from "./StartupSection";
 import { ClipboardSection } from "./ClipboardSection";
 import { ImageSection } from "./ImageSection";
 import { DataSection } from "./DataSection";
+import { RetentionSection } from "./RetentionSection";
 
 export {
   StorageSection,
@@ -16,5 +17,6 @@ export {
   ClipboardSection,
   ImageSection,
   DataSection,
+  RetentionSection,
 };
 export type { ClipboardStorageStats } from "./ClipboardSection";

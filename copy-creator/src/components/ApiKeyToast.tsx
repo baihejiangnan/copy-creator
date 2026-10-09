@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { onStorageIdentity, isCurrentStorageIdentity, type StorageEvent } from "../lib/storageIdentity";
 
 interface ToastItem {
   id: number;
@@ -14,10 +15,12 @@ export default function ApiKeyToast() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   useEffect(() => {
-    const unlisten = listen<{ record_id: string; key_preview: string; guess: string | null }>(
+    const offIdentity = onStorageIdentity(() => setToasts([]));
+    const unlisten = listen<StorageEvent<{ record_id: string; key_preview: string; guess: string | null }>>(
       "api-key-detected",
       (event) => {
-        const { record_id, key_preview, guess } = event.payload;
+        if (!isCurrentStorageIdentity(event.payload?.storage_epoch)) return;
+        const { record_id, key_preview, guess } = event.payload.value;
         const item: ToastItem = {
           id: ++toastCounter,
           recordId: record_id,
@@ -32,6 +35,7 @@ export default function ApiKeyToast() {
       },
     );
     return () => {
+      offIdentity();
       unlisten.then((fn) => fn());
     };
   }, []);

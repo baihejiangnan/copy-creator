@@ -4,12 +4,142 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use base64::Engine as _;
 
 pub static PASTING: AtomicBool = AtomicBool::new(false);
+static SENSITIVE_CLIPBOARD_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn sensitive_clipboard_sequence() -> u32 {
+    SENSITIVE_CLIPBOARD_SEQUENCE.load(Ordering::SeqCst)
+}
+
+pub fn clear_sensitive_clipboard() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardSequenceNumber, OpenClipboard};
+        let expected = sensitive_clipboard_sequence();
+        if expected == 0 || OpenClipboard(None).is_err() { return; }
+        // Check while holding the native clipboard lock, so a later user copy
+        // cannot be erased between checking ownership and clearing the data.
+        let current = GetClipboardSequenceNumber();
+        let finished = current != expected || EmptyClipboard().is_ok();
+        let _ = CloseClipboard();
+        if finished {
+            let _ = SENSITIVE_CLIPBOARD_SEQUENCE.compare_exchange(expected, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+}
+
+pub fn copy_sensitive_text(app: AppHandle, text: String) -> Result<(), String> {
+    if PASTING.swap(true, Ordering::SeqCst) { return Err("vault.clipboardBusy".into()); }
+    let _guard = PasteGuard;
+    let text = zeroize::Zeroizing::new(text);
+    write_sensitive_clipboard(&app, &text).map(|_| ())
+}
+
+// The caller keeps PasteGuard alive for the entire copy / focus / paste operation.
+fn write_sensitive_clipboard(app: &AppHandle, text: &str) -> Result<u32, String> {
+    let _capture = crate::clipboard::capture_guard();
+    #[cfg(target_os = "windows")]
+    let sequence = write_private_clipboard_text(app, text)?;
+    #[cfg(not(target_os = "windows"))]
+    let sequence = {
+        app.clipboard().write_text(text).map_err(|_| "vault.copyFailed")?;
+        0
+    };
+    SENSITIVE_CLIPBOARD_SEQUENCE.store(sequence, Ordering::SeqCst);
+    crate::clipboard::sync_monitor_cache(app);
+    std::thread::spawn(move || {
+        thread::sleep(Duration::from_secs(30));
+        for _ in 0..10 {
+            if sensitive_clipboard_sequence() != sequence { break; }
+            clear_sensitive_clipboard();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+    Ok(sequence)
+}
 
 #[cfg(target_os = "windows")]
-static LAST_FOREGROUND_HWND: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(ptr::null_mut());
+fn write_private_clipboard_text(app: &AppHandle, text: &str) -> Result<u32, String> {
+    use windows::core::w;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::DataExchange::{EmptyClipboard, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW};
+    let window = app.get_webview_window("main").ok_or("vault.copyFailed")?;
+    let raw_hwnd = window.hwnd().map_err(|_| "vault.copyFailed")?;
+    unsafe { OpenClipboard(HWND(raw_hwnd.0)) }.map_err(|_| "vault.clipboardBusy")?;
+    let _clipboard = WindowsClipboardSession;
+    unsafe { EmptyClipboard() }.map_err(|_| "vault.copyFailed")?;
+    // Register the documented Windows opt-out formats in the same clipboard
+    // transaction as the text. The OS sees the protection flags before closing.
+    for name in [w!("CanIncludeInClipboardHistory"), w!("CanUploadToCloudClipboard"), w!("ExcludeClipboardContentFromMonitorProcessing")] {
+        let format = unsafe { RegisterClipboardFormatW(name) };
+        if format == 0 { return Err("vault.copyFailed".into()); }
+        set_clipboard_bytes(format, &0u32.to_le_bytes(), "private flag").map_err(|_| "vault.copyFailed")?;
+    }
+    let bytes = zeroize::Zeroizing::new(text.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect::<Vec<_>>());
+    set_clipboard_bytes(13, &bytes, "private text").map_err(|_| "vault.copyFailed")?;
+    Ok(unsafe { GetClipboardSequenceNumber() })
+}
 
 #[cfg(target_os = "windows")]
-static LAST_FOCUS_HWND: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(ptr::null_mut());
+static LAST_FOREGROUND_TARGET: Mutex<Option<ForegroundTarget>> = Mutex::new(None);
+
+// Keep the window, focused control and their owners together. A paste snapshots
+// this value once, so a later foreground event cannot redirect a credential.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Default)]
+struct ForegroundTarget {
+    window: usize,
+    focus: usize,
+    window_thread: u32,
+    window_process: u32,
+    focus_thread: u32,
+    focus_process: u32,
+}
+
+#[cfg(target_os = "windows")]
+fn window_identity(hwnd: windows::Win32::Foundation::HWND) -> (u32, u32) {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    let mut process = 0;
+    let thread = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process)) };
+    (thread, process)
+}
+
+#[cfg(target_os = "windows")]
+impl ForegroundTarget {
+    fn window(self) -> windows::Win32::Foundation::HWND {
+        windows::Win32::Foundation::HWND(self.window as *mut core::ffi::c_void)
+    }
+
+    fn focus(self) -> windows::Win32::Foundation::HWND {
+        windows::Win32::Foundation::HWND(self.focus as *mut core::ffi::c_void)
+    }
+
+    fn valid(self, require_focus: bool) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{IsChild, IsWindow};
+        let window = self.window();
+        let focus = self.focus();
+        unsafe {
+            if window.is_invalid()
+                || window.0 == OUR_HWND.load(Ordering::SeqCst)
+                || window.0 == RADIAL_HWND.load(Ordering::SeqCst)
+                || !IsWindow(window).as_bool()
+                || self.window_thread == 0
+                || self.window_process == 0
+                || window_identity(window) != (self.window_thread, self.window_process)
+            {
+                return false;
+            }
+            if !require_focus {
+                return true;
+            }
+            !focus.is_invalid()
+                && IsWindow(focus).as_bool()
+                && self.focus_thread != 0
+                && self.focus_process != 0
+                && window_identity(focus) == (self.focus_thread, self.focus_process)
+                && (focus == window || IsChild(window, focus).as_bool())
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
 static OUR_HWND: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(ptr::null_mut());
@@ -30,13 +160,13 @@ fn remember_foreground_target(hwnd: windows::Win32::Foundation::HWND, thread_id:
         GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
     };
 
-    if hwnd.is_invalid() {
+    // Native tray menus and file dialogs belong to this process too. They must
+    // not replace the last external window when they take foreground/focus.
+    if hwnd.is_invalid() || window_identity(hwnd).1 == std::process::id() {
         return;
     }
 
     unsafe {
-        LAST_FOREGROUND_HWND.store(hwnd.0, Ordering::SeqCst);
-
         let target_thread = if thread_id == 0 {
             GetWindowThreadProcessId(hwnd, None)
         } else {
@@ -57,7 +187,18 @@ fn remember_foreground_target(hwnd: windows::Win32::Foundation::HWND, thread_id:
         } else {
             HWND::default()
         };
-        LAST_FOCUS_HWND.store(focus.0, Ordering::SeqCst);
+        let (window_thread, window_process) = window_identity(hwnd);
+        let (focus_thread, focus_process) = window_identity(focus);
+        if let Ok(mut saved) = LAST_FOREGROUND_TARGET.lock() {
+            *saved = Some(ForegroundTarget {
+                window: hwnd.0 as usize,
+                focus: focus.0 as usize,
+                window_thread,
+                window_process,
+                focus_thread,
+                focus_process,
+            });
+        }
 
         log::debug!(
             "[paste] saved foreground=0x{:x}, focus=0x{:x}, thread={}",
@@ -83,22 +224,21 @@ pub fn save_foreground_window() {
 }
 
 #[cfg(target_os = "windows")]
-fn saved_target_has_focus() -> bool {
-    use windows::Win32::Foundation::HWND;
+fn saved_target_has_focus(saved: ForegroundTarget, require_focus: bool) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsChild, IsWindow,
         GUITHREADINFO,
     };
 
     unsafe {
-        let target = HWND(LAST_FOREGROUND_HWND.load(Ordering::SeqCst));
-        if target.is_invalid() || !IsWindow(target).as_bool() || GetForegroundWindow() != target {
+        let target = saved.window();
+        if !saved.valid(require_focus) || GetForegroundWindow() != target {
             return false;
         }
 
-        let saved_focus = HWND(LAST_FOCUS_HWND.load(Ordering::SeqCst));
+        let saved_focus = saved.focus();
         if saved_focus.is_invalid() || !IsWindow(saved_focus).as_bool() {
-            return true;
+            return !require_focus;
         }
 
         let focus_thread = GetWindowThreadProcessId(saved_focus, None);
@@ -122,13 +262,13 @@ fn saved_target_has_focus() -> bool {
             return false;
         }
         current_focus == saved_focus
-            || IsChild(saved_focus, current_focus).as_bool()
-            || IsChild(current_focus, saved_focus).as_bool()
+            || (!require_focus && (IsChild(saved_focus, current_focus).as_bool()
+                || IsChild(current_focus, saved_focus).as_bool()))
     }
 }
 
 #[cfg(target_os = "windows")]
-fn restore_foreground_target() -> bool {
+fn restore_foreground_target(saved: ForegroundTarget, require_focus: bool) -> bool {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
@@ -137,12 +277,12 @@ fn restore_foreground_target() -> bool {
     };
 
     unsafe {
-        let target = HWND(LAST_FOREGROUND_HWND.load(Ordering::SeqCst));
-        if target.is_invalid() || !IsWindow(target).as_bool() {
+        let target = saved.window();
+        if !saved.valid(require_focus) {
             return false;
         }
 
-        let saved_focus = HWND(LAST_FOCUS_HWND.load(Ordering::SeqCst));
+        let saved_focus = saved.focus();
         let focus_valid = !saved_focus.is_invalid() && IsWindow(saved_focus).as_bool();
         let current_thread = GetCurrentThreadId();
         let target_thread = GetWindowThreadProcessId(target, None);
@@ -168,7 +308,7 @@ fn restore_foreground_target() -> bool {
         if focus_valid {
             let _ = SetFocus(saved_focus);
         }
-        let ready = saved_target_has_focus();
+        let ready = saved_target_has_focus(saved, require_focus);
 
         if attached_focus {
             let _ = AttachThreadInput(current_thread, focus_thread, false);
@@ -184,23 +324,23 @@ fn restore_foreground_target() -> bool {
             foreground_set,
             ready
         );
-        ready || (foreground_set && !focus_valid)
+        ready || (!require_focus && foreground_set && !focus_valid)
     }
 }
 
 #[cfg(target_os = "windows")]
-fn restore_foreground_target_and_wait() -> bool {
-    let _ = restore_foreground_target();
+fn restore_foreground_target_and_wait(saved: ForegroundTarget, require_focus: bool) -> bool {
+    let _ = restore_foreground_target(saved, require_focus);
     let start = std::time::Instant::now();
     let timeout = Duration::from_millis(180);
     let mut retried = false;
 
     loop {
-        if saved_target_has_focus() {
+        if saved_target_has_focus(saved, require_focus) {
             return true;
         }
         if !retried && start.elapsed() >= Duration::from_millis(60) {
-            let _ = restore_foreground_target();
+            let _ = restore_foreground_target(saved, require_focus);
             retried = true;
         }
         if start.elapsed() >= timeout {
@@ -211,11 +351,195 @@ fn restore_foreground_target_and_wait() -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn paste_modifiers_released() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+    [VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN, VK_SHIFT]
+        .iter()
+        .all(|key| unsafe { (GetAsyncKeyState(key.0 as i32) as u16) & 0x8000 == 0 })
+}
+
+pub fn paste_sensitive_text(app: AppHandle, text: zeroize::Zeroizing<String>) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, text);
+        Err("vault.pasteUnsupported".into())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+        use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+
+        if PASTING.swap(true, Ordering::SeqCst) {
+            return Err("vault.clipboardBusy".into());
+        }
+        let _guard = PasteGuard;
+        let target = LAST_FOREGROUND_TARGET
+            .lock()
+            .map_err(|_| "vault.pasteNoTarget")?
+            .filter(|target| target.valid(true))
+            .ok_or("vault.pasteNoTarget")?;
+        let window = app.get_webview_window("main").ok_or("vault.pasteFailed")?;
+        let hide = !window.is_always_on_top().map_err(|_| "vault.pasteFailed")?;
+        let mut enigo = Enigo::new(&Settings::default()).map_err(|_| "vault.pasteFailed")?;
+
+        // Do not reinterpret Ctrl+V as a different shortcut if popup gesture
+        // modifiers remain held. In this case no credential is copied either.
+        let start = std::time::Instant::now();
+        while !paste_modifiers_released() {
+            if start.elapsed() >= Duration::from_millis(500) {
+                return Err("vault.pasteModifiersHeld".into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        if !target.valid(true) {
+            return Err("vault.pasteNoTarget".into());
+        }
+
+        let sequence = write_sensitive_clipboard(&app, &text)?;
+        let result = (|| {
+            unsafe { let _ = AllowSetForegroundWindow(0xFFFFFFFF); }
+            if let Some(radial) = app.get_webview_window("radial-menu") {
+                radial.hide().map_err(|_| "vault.pasteFailed")?;
+            }
+            if hide {
+                crate::lifecycle::hide_main(&window).map_err(|_| "vault.pasteFailed")?;
+            }
+            if !restore_foreground_target_and_wait(target, true) {
+                return Err("vault.pasteNoTarget");
+            }
+            if !paste_modifiers_released() {
+                return Err("vault.pasteModifiersHeld");
+            }
+            if unsafe { GetClipboardSequenceNumber() } != sequence {
+                return Err("vault.pasteClipboardChanged");
+            }
+
+            let pressed = enigo.key(Key::Control, Direction::Press);
+            // Check the same captured window / control and clipboard again
+            // immediately before V. Always release our Ctrl, including errors.
+            let pasted = if pressed.is_err() {
+                Err("vault.pasteFailed")
+            } else if !saved_target_has_focus(target, true) {
+                Err("vault.pasteNoTarget")
+            } else if unsafe { GetClipboardSequenceNumber() } != sequence {
+                Err("vault.pasteClipboardChanged")
+            } else {
+                enigo.key(Key::V, Direction::Click).map_err(|_| "vault.pasteFailed")
+            };
+            let released = enigo.key(Key::Control, Direction::Release).map_err(|_| "vault.pasteFailed");
+            pasted.and(released)
+        })();
+
+        if let Err(error) = result {
+            clear_sensitive_clipboard();
+            if hide {
+                // Return to the locked app so a focus failure is visible and
+                // the user can retry or choose the ordinary copy button.
+                let _ = crate::lifecycle::show_main(&window);
+                let _ = window.set_focus();
+            }
+            return Err(error.into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod private_paste_tests {
+    use super::ForegroundTarget;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE};
+
+    struct HiddenTestWindow(HWND);
+
+    impl HiddenTestWindow {
+        fn new() -> Self {
+            // No WS_VISIBLE, focus changes, clipboard writes or keyboard input.
+            Self(unsafe { CreateWindowExW(
+                WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"),
+                windows::core::w!("private paste validation"), WINDOW_STYLE::default(),
+                0, 0, 1, 1, None, None, None, None,
+            ) }.unwrap())
+        }
+
+        fn target(&self) -> ForegroundTarget {
+            let (thread, process) = super::window_identity(self.0);
+            ForegroundTarget {
+                window: self.0.0 as usize, focus: self.0.0 as usize,
+                window_thread: thread, window_process: process,
+                focus_thread: thread, focus_process: process,
+            }
+        }
+    }
+
+    impl Drop for HiddenTestWindow {
+        fn drop(&mut self) { unsafe { let _ = DestroyWindow(self.0); } }
+    }
+
+    #[test]
+    fn an_owned_native_menu_or_dialog_cannot_replace_the_external_paste_target() {
+        let native_window = HiddenTestWindow::new();
+        *super::LAST_FOREGROUND_TARGET.lock().unwrap() = None;
+        super::remember_foreground_target(native_window.0, 0);
+        assert!(super::LAST_FOREGROUND_TARGET.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn missing_or_destroyed_target_never_allows_private_paste() {
+        let missing = ForegroundTarget::default();
+        assert!(!missing.valid(true));
+        assert!(!super::saved_target_has_focus(missing, true));
+        let invalid = ForegroundTarget {
+            window: usize::MAX,
+            focus: usize::MAX,
+            window_thread: 1,
+            window_process: 1,
+            focus_thread: 1,
+            focus_process: 1,
+        };
+        assert!(!invalid.valid(true));
+        assert!(!super::restore_foreground_target_and_wait(invalid, true));
+    }
+
+    #[test]
+    fn private_paste_rejects_replaced_window_owners_and_closed_controls() {
+        let window = HiddenTestWindow::new();
+        let target = window.target();
+        assert!(target.valid(true));
+        assert!(!ForegroundTarget { window_process: target.window_process + 1, ..target }.valid(true));
+        assert!(!ForegroundTarget { focus_thread: target.focus_thread + 1, ..target }.valid(true));
+        assert!(!ForegroundTarget { focus: 0, ..target }.valid(true));
+        // Ordinary clipboard pastes retain the previous no-control fallback.
+        assert!(ForegroundTarget { focus: 0, ..target }.valid(false));
+        drop(window);
+        assert!(!target.valid(true));
+    }
+
+    #[test]
+    fn private_paste_rejects_a_control_from_a_different_window() {
+        let window = HiddenTestWindow::new();
+        let other = HiddenTestWindow::new();
+        let target = window.target();
+        let other_target = other.target();
+        assert!(!ForegroundTarget {
+            focus: other_target.focus,
+            focus_thread: other_target.focus_thread,
+            focus_process: other_target.focus_process,
+            ..target
+        }.valid(true));
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn init_foreground_tracker(window: &tauri::WebviewWindow) {
     use windows::Win32::UI::Accessibility::SetWinEventHook;
     use windows::Win32::UI::WindowsAndMessaging::WINEVENT_OUTOFCONTEXT;
 
     const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+    const EVENT_OBJECT_FOCUS: u32 = 0x8005;
 
     let our_hwnd = window.hwnd().unwrap_or_default();
     OUR_HWND.store(our_hwnd.0, Ordering::SeqCst);
@@ -226,6 +550,17 @@ pub fn init_foreground_tracker(window: &tauri::WebviewWindow) {
             EVENT_SYSTEM_FOREGROUND,
             None,
             Some(foreground_change_hook),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        );
+        // When a pinned panel stays open, selecting another control inside the
+        // same external window does not raise a foreground-window event.
+        SetWinEventHook(
+            EVENT_OBJECT_FOCUS,
+            EVENT_OBJECT_FOCUS,
+            None,
+            Some(focus_change_hook),
             0,
             0,
             WINEVENT_OUTOFCONTEXT,
@@ -250,6 +585,28 @@ unsafe extern "system" fn foreground_change_hook(
     }
 }
 
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn focus_change_hook(
+    _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    hwnd: windows::Win32::Foundation::HWND,
+    _id_object: i32,
+    _id_child: i32,
+    _event_thread: u32,
+    _event_time: u32,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
+    if PASTING.load(Ordering::SeqCst) || hwnd.is_invalid() { return; }
+    let root = GetAncestor(hwnd, GA_ROOT);
+    if !root.is_invalid()
+        && root == GetForegroundWindow()
+        && root.0 != OUR_HWND.load(Ordering::SeqCst)
+        && root.0 != RADIAL_HWND.load(Ordering::SeqCst)
+    {
+        remember_foreground_target(root, 0);
+    }
+}
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -261,8 +618,19 @@ struct CachedImage {
 }
 
 struct ImageCache {
+    epoch: Option<u64>,
     map: HashMap<String, CachedImage>,
     order: Vec<String>,
+}
+
+impl ImageCache {
+    fn bind_epoch(&mut self, epoch: u64) {
+        if self.epoch != Some(epoch) {
+            self.map.clear();
+            self.order.clear();
+            self.epoch = Some(epoch);
+        }
+    }
 }
 
 static IMAGE_CACHE: OnceLock<Mutex<ImageCache>> = OnceLock::new();
@@ -270,6 +638,7 @@ static IMAGE_CACHE: OnceLock<Mutex<ImageCache>> = OnceLock::new();
 fn get_image_cache() -> &'static Mutex<ImageCache> {
     IMAGE_CACHE.get_or_init(|| {
         Mutex::new(ImageCache {
+            epoch: None,
             map: HashMap::new(),
             order: Vec::new(),
         })
@@ -284,8 +653,9 @@ impl Drop for PasteGuard {
     }
 }
 
-pub fn cache_image(path: String, rgba: Vec<u8>, width: u32, height: u32, png_bytes: Vec<u8>) {
+pub fn cache_image(app: &AppHandle, path: String, rgba: Vec<u8>, width: u32, height: u32, png_bytes: Vec<u8>) {
     let mut cache = get_image_cache().lock().unwrap();
+    cache.bind_epoch(app.state::<crate::db::DbState>().storage_epoch.load(Ordering::Relaxed));
     // Evict oldest entries (deterministic insertion order)
     if cache.map.len() >= 30 {
         let evict_count = 15.min(cache.order.len());
@@ -314,9 +684,25 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 type ClipboardImageData = (Arc<Vec<u8>>, u32, u32, Arc<Vec<u8>>);
 
+fn paste_directory_for_identifier(base: &std::path::Path, identifier: &str) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    if identifier == "com.copycreator.app" {
+        base.join("copy_creator_paste")
+    } else {
+        // Keep alternate instances out of the legacy production cleanup tree.
+        // A digest gives a fixed, safe path component for any configured ID.
+        base.join("copy_creator_paste_instances").join(format!("{:x}", Sha256::digest(identifier.as_bytes())))
+    }
+}
+
+pub(crate) fn paste_image_directory(app: &AppHandle) -> std::path::PathBuf {
+    paste_directory_for_identifier(&std::env::temp_dir(), &app.config().identifier)
+}
+
 fn load_image_for_clipboard(app: &AppHandle, path: &str) -> Result<ClipboardImageData, String> {
     {
-        let cache = get_image_cache().lock().map_err(|e| e.to_string())?;
+        let mut cache = get_image_cache().lock().map_err(|_| "clipboard.copyFailed")?;
+        cache.bind_epoch(app.state::<crate::db::DbState>().storage_epoch.load(Ordering::Relaxed));
         if let Some(cached) = cache.map.get(path) {
             return Ok((
                 cached.rgba.clone(),
@@ -344,6 +730,7 @@ fn load_image_for_clipboard(app: &AppHandle, path: &str) -> Result<ClipboardImag
     };
 
     cache_image(
+        app,
         path.to_string(),
         rgba.clone(),
         width,
@@ -354,6 +741,13 @@ fn load_image_for_clipboard(app: &AppHandle, path: &str) -> Result<ClipboardImag
 }
 
 fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let clipboard_sequence = unsafe {
+        windows::Win32::System::DataExchange::GetClipboardSequenceNumber()
+    };
+    #[cfg(target_os = "windows")]
+    let target = LAST_FOREGROUND_TARGET.lock().map_err(|_| "clipboard.pasteFailed")?
+        .filter(|target| target.valid(false)).ok_or("clipboard.pasteFailed")?;
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
@@ -368,14 +762,14 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("no window")?;
 
     if !window.is_always_on_top().unwrap_or(false) {
-        window.hide().map_err(|e| e.to_string())?;
+        crate::lifecycle::hide_main(&window).map_err(|e| e.to_string())?;
     }
 
     // Wait for modifiers from the popup gestures to be released before sending Ctrl+V.
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::UI::Input::KeyboardAndMouse::{
-            GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+            GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
         };
         let start = std::time::Instant::now();
         let timeout = Duration::from_millis(500);
@@ -386,19 +780,22 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
                 (GetAsyncKeyState(VK_LWIN.0 as i32) as u16) & 0x8000 == 0
                     && (GetAsyncKeyState(VK_RWIN.0 as i32) as u16) & 0x8000 == 0
             };
-            if ctrl_up && alt_up && win_up {
+            let shift_up = unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16) & 0x8000 } == 0;
+            if ctrl_up && alt_up && win_up && shift_up {
                 break;
             }
             if start.elapsed() > timeout {
-                break;
+                return Err("clipboard.pasteFailed".into());
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let restored = restore_foreground_target_and_wait();
-        if !restored {
-            log::warn!("[paste] target focus was not confirmed before Ctrl+V");
+        if !restore_foreground_target_and_wait(target, false) {
+            return Err("clipboard.pasteFailed".into());
         }
-        thread::sleep(Duration::from_millis(10));
+        // Give clipboard-change consumers and target activation a bounded
+        // settling interval. Foreground/focus/modifiers are checked again below;
+        // this is not a confirmation that the destination has pasted anything.
+        thread::sleep(Duration::from_millis(100));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -410,17 +807,42 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        enigo
-            .key(Key::Control, Direction::Press)
-            .map_err(|e| e.to_string())?;
+        if !saved_target_has_focus(target, false) || !paste_modifiers_released() {
+            return Err("clipboard.pasteFailed".into());
+        }
+        let pressed = enigo.key(Key::Control, Direction::Press);
         thread::sleep(Duration::from_millis(30));
-        enigo
-            .key(Key::V, Direction::Click)
-            .map_err(|e| e.to_string())?;
+        let pasted = if pressed.is_ok() && saved_target_has_focus(target, false) {
+            // Windows shell clipboard consumers can temporarily hold the
+            // clipboard after a write. Wait before sending V, never resend it:
+            // a blind retry could duplicate content in an external application.
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardSequenceNumber, OpenClipboard};
+            use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT};
+            let target_ready = || {
+                saved_target_has_focus(target, false)
+                    && unsafe { GetClipboardSequenceNumber() } == clipboard_sequence
+                    && [VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN].iter().all(|key| {
+                        unsafe { (GetAsyncKeyState(key.0 as i32) as u16) & 0x8000 == 0 }
+                    })
+            };
+            let deadline = std::time::Instant::now() + Duration::from_millis(200);
+            let ready = loop {
+                if !target_ready() { break false; }
+                if unsafe { OpenClipboard(HWND::default()) }.is_ok() {
+                    let _ = unsafe { CloseClipboard() };
+                    break true;
+                }
+                if std::time::Instant::now() >= deadline { break false; }
+                thread::sleep(Duration::from_millis(5));
+            };
+            if ready && target_ready() {
+                enigo.key(Key::V, Direction::Click).map_err(|_| "clipboard.pasteFailed")
+            } else { Err("clipboard.pasteFailed") }
+        } else { Err("clipboard.pasteFailed") };
         thread::sleep(Duration::from_millis(10));
-        enigo
-            .key(Key::Control, Direction::Release)
-            .map_err(|e| e.to_string())?;
+        let released = enigo.key(Key::Control, Direction::Release).map_err(|_| "clipboard.pasteFailed");
+        pasted.and(released)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -632,7 +1054,7 @@ mod windows_clipboard_tests {
 }
 
 #[cfg(target_os = "windows")]
-fn write_image_to_clipboard(rgba: &[u8], w: u32, h: u32, png_bytes: &[u8]) -> Result<(), String> {
+fn write_image_to_clipboard(app: &AppHandle, rgba: &[u8], w: u32, h: u32, png_bytes: &[u8]) -> Result<(), String> {
     use windows::Win32::System::DataExchange::{EmptyClipboard, RegisterClipboardFormatW};
     use windows::Win32::UI::Shell::DROPFILES;
 
@@ -647,8 +1069,7 @@ fn write_image_to_clipboard(rgba: &[u8], w: u32, h: u32, png_bytes: &[u8]) -> Re
 
     // Write PNG to a temp file for CF_HDROP
     let temp_png_path = {
-        let mut dir = std::env::temp_dir();
-        dir.push("copy_creator_paste");
+        let mut dir = paste_image_directory(app);
         std::fs::create_dir_all(&dir).ok();
         dir.push(format!("paste_{}.png", uuid::Uuid::new_v4()));
         std::fs::write(&dir, png_bytes).map_err(|e| format!("Temp file write: {}", e))?;
@@ -756,162 +1177,142 @@ fn write_files_to_clipboard(paths: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn write_text(app: AppHandle, text: String, paste_after: bool) -> Result<(), String> {
+enum ClipboardAction {
+    Text(String),
+    Image(String),
+    File(String),
+}
+
+// Runs only inside a registered blocking worker. Its permit covers decoding,
+// clipboard ownership, focus restoration and the final key release.
+fn perform_action(app: &AppHandle, action: ClipboardAction, paste_after: bool) -> Result<(), String> {
     if PASTING.swap(true, Ordering::SeqCst) {
-        return Ok(());
+        return Err("clipboard.busy".into());
     }
-
-    let guard = PasteGuard;
-
-    if let Err(e) = app.clipboard().write_text(text) {
-        drop(guard);
-        return Err(e.to_string());
+    let _guard = PasteGuard;
+    match action {
+        ClipboardAction::Text(text) => {
+            let _capture = crate::clipboard::capture_guard();
+            app.clipboard().write_text(text).map_err(|_| "clipboard.copyFailed")?;
+            crate::clipboard::sync_monitor_cache(app);
+        }
+        ClipboardAction::Image(path) => {
+            let (rgba, width, height, png) = load_image_for_clipboard(app, &path)
+                .map_err(|_| "clipboard.copyFailed")?;
+            let _capture = crate::clipboard::capture_guard();
+            #[cfg(target_os = "windows")]
+            write_image_to_clipboard(app, &rgba, width, height, &png).map_err(|_| "clipboard.copyFailed")?;
+            #[cfg(not(target_os = "windows"))]
+            app.clipboard().write_image(&tauri::image::Image::new_owned(rgba.to_vec(), width, height))
+                .map_err(|_| "clipboard.copyFailed")?;
+            crate::clipboard::sync_monitor_cache(app);
+        }
+        ClipboardAction::File(path) => {
+            std::fs::metadata(&path).map_err(|_| "notes.fileMissing")?;
+            let _capture = crate::clipboard::capture_guard();
+            #[cfg(target_os = "windows")]
+            write_files_to_clipboard(std::slice::from_ref(&path)).map_err(|_| "clipboard.copyFailed")?;
+            #[cfg(not(target_os = "windows"))]
+            app.clipboard().write_text(&path).map_err(|_| "clipboard.copyFailed")?;
+            crate::clipboard::sync_monitor_cache(app);
+        }
     }
-
-    crate::clipboard::sync_monitor_cache(&app);
-
     if paste_after {
-        let handle = app.clone();
-        std::thread::spawn(move || {
-            let _guard = guard;
-            paste_with_defocus(&handle).ok();
+        if paste_with_defocus(app).is_err() {
+            // The worker permit keeps the event tied to this storage identity.
+            // Emit no target, clipboard contents or platform error details.
+            let _ = crate::storage_events::emit(app, "clipboard-paste-failed", true);
+            return Err("clipboard.pasteFailed".into());
+        }
+    }
+    Ok(())
+}
+
+async fn run_action(app: AppHandle, expected_storage_epoch: u64, action: ClipboardAction, paste_after: bool) -> Result<(), String> {
+    let permit = crate::lifecycle::accept_async_operation(&app)?;
+    crate::db::require_storage_epoch(&app, Some(expected_storage_epoch))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        perform_action(&app, action, paste_after)
+    }).await.map_err(|_| "clipboard.copyFailed")?
+}
+
+#[tauri::command]
+pub async fn copy_text(app: AppHandle, text: String, expected_storage_epoch: u64) -> Result<(), String> {
+    run_action(app, expected_storage_epoch, ClipboardAction::Text(text), false).await
+}
+
+#[tauri::command]
+pub async fn paste_text(app: AppHandle, text: String, expected_storage_epoch: u64) -> Result<(), String> {
+    run_action(app, expected_storage_epoch, ClipboardAction::Text(text), true).await
+}
+
+#[tauri::command]
+pub async fn copy_image(app: AppHandle, path: String, expected_storage_epoch: u64) -> Result<(), String> {
+    run_action(app, expected_storage_epoch, ClipboardAction::Image(path), false).await
+}
+
+#[tauri::command]
+pub async fn paste_image(app: AppHandle, path: String, expected_storage_epoch: u64) -> Result<(), String> {
+    run_action(app, expected_storage_epoch, ClipboardAction::Image(path), true).await
+}
+
+#[tauri::command]
+pub async fn copy_file(app: AppHandle, path: String, expected_storage_epoch: u64) -> Result<(), String> {
+    run_action(app, expected_storage_epoch, ClipboardAction::File(path), false).await
+}
+
+#[tauri::command]
+pub async fn paste_file(app: AppHandle, path: String, expected_storage_epoch: u64) -> Result<(), String> {
+    run_action(app, expected_storage_epoch, ClipboardAction::File(path), true).await
+}
+
+pub fn run_record_action(app: &AppHandle, epoch: u64, id: String, paste_after: bool) -> Result<(), String> {
+    let permit = crate::lifecycle::accept_async_operation(app)?;
+    crate::db::require_storage_epoch(app, Some(epoch))?;
+    let app = app.clone();
+    // The native menu callback must stay nonblocking. Register before spawning,
+    // so a handoff cannot drain between the callback and the worker's start.
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let result = crate::db::get_clipboard_action_record(&app, &id).and_then(|record| {
+            let action = match record.record_type.as_str() {
+                "image" => ClipboardAction::Image(record.content),
+                "file" => ClipboardAction::File(record.content),
+                _ => ClipboardAction::Text(record.content),
+            };
+            perform_action(&app, action, paste_after)
         });
-    } else {
-        drop(guard);
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
-    write_text(app, text, false)
-}
-
-#[tauri::command]
-pub fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
-    write_text(app, text, true)
-}
-
-fn write_image(app: AppHandle, path: String, paste_after: bool) -> Result<(), String> {
-    if PASTING.swap(true, Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        let _guard = PasteGuard;
-        let (rgba, w, h, png) = match load_image_for_clipboard(&handle, &path) {
-            Ok(image) => image,
-            Err(error) => {
-                log::error!("write_image: {error}");
-                return;
-            }
-        };
-
-        #[cfg(target_os = "windows")]
-        {
-            if let Err(e) = write_image_to_clipboard(&rgba, w, h, &png) {
-                log::error!("write_image: clipboard error: {e}");
-                return;
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let tauri_img = tauri::image::Image::new_owned(rgba.to_vec(), w, h);
-            if let Err(e) = handle.clipboard().write_image(&tauri_img) {
-                log::error!("paste_image: write clipboard error: {}", e);
-                return;
-            }
-        }
-
-        crate::clipboard::sync_monitor_cache(&handle);
-        if paste_after {
-            paste_with_defocus(&handle).ok();
-        }
+        if result.is_err() { log::warn!("tray clipboard action failed"); }
     });
-
     Ok(())
 }
 
-#[tauri::command]
-pub fn copy_image(app: AppHandle, path: String) -> Result<(), String> {
-    write_image(app, path, false)
-}
-
-#[tauri::command]
-pub fn paste_image(app: AppHandle, path: String) -> Result<(), String> {
-    write_image(app, path, true)
-}
-
-fn write_file(app: AppHandle, path: String, paste_after: bool) -> Result<(), String> {
-    if PASTING.swap(true, Ordering::SeqCst) {
-        return Ok(());
+#[cfg(test)]
+mod cache_identity_tests {
+    use super::*;
+    #[test]
+    fn alternate_instances_never_write_or_clean_the_production_paste_directory() {
+        let base = std::path::Path::new("synthetic-temp-root");
+        let production = paste_directory_for_identifier(base, "com.copycreator.app");
+        let qa = paste_directory_for_identifier(base, "com.copycreator.qa20261007");
+        let other = paste_directory_for_identifier(base, "com.copycreator.other");
+        assert_eq!(production, base.join("copy_creator_paste"));
+        assert!(!qa.starts_with(&production));
+        assert_ne!(qa, other);
+        assert_eq!(qa, paste_directory_for_identifier(base, "com.copycreator.qa20261007"));
+        assert_eq!(qa.file_name().unwrap().to_string_lossy().len(), 64);
+        assert!(paste_directory_for_identifier(base, "../../com.copycreator.app").starts_with(base.join("copy_creator_paste_instances")));
     }
-
-    let file_meta = std::fs::metadata(&path);
-    if file_meta.is_err() {
-        log::error!("write_file: file not found: {}", path);
-        PASTING.store(false, Ordering::SeqCst);
-        return Err(format!("File not found: {}", path));
+    #[test]
+    fn identical_relative_paths_cannot_reuse_images_from_a_previous_store() {
+        let mut cache = ImageCache { epoch: Some(1), map: HashMap::new(), order: vec!["images/same.png".into()] };
+        cache.map.insert("images/same.png".into(), CachedImage { rgba: Arc::new(vec![1,2,3,4]), width: 1, height: 1, png_bytes: Arc::new(vec![5]) });
+        cache.bind_epoch(1);
+        assert_eq!(cache.map.len(), 1);
+        cache.bind_epoch(2);
+        assert!(cache.map.is_empty());
+        assert!(cache.order.is_empty());
+        assert_eq!(cache.epoch, Some(2));
     }
-
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        let _guard = PasteGuard;
-
-        #[cfg(target_os = "windows")]
-        {
-            if let Err(e) = write_files_to_clipboard(std::slice::from_ref(&path)) {
-                log::error!("write_file: clipboard error: {}", e);
-                return;
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            if let Err(e) = handle.clipboard().write_text(&path) {
-                log::error!("paste_file: write clipboard error: {}", e);
-                return;
-            }
-        }
-
-        crate::clipboard::sync_monitor_cache(&handle);
-        if paste_after {
-            paste_with_defocus(&handle).ok();
-        }
-    });
-
-    Ok(())
-}
-
-#[tauri::command]
-pub fn copy_file(app: AppHandle, path: String) -> Result<(), String> {
-    write_file(app, path, false)
-}
-
-#[tauri::command]
-pub fn paste_file(app: AppHandle, path: String) -> Result<(), String> {
-    write_file(app, path, true)
-}
-
-fn run_record_action(app: &AppHandle, id: &str, paste_after: bool) -> Result<(), String> {
-    let record = crate::db::get_clipboard_action_record(app, id)?;
-    match (record.record_type.as_str(), paste_after) {
-        ("image", false) => copy_image(app.clone(), record.content),
-        ("image", true) => paste_image(app.clone(), record.content),
-        ("file", false) => copy_file(app.clone(), record.content),
-        ("file", true) => paste_file(app.clone(), record.content),
-        (_, false) => copy_text(app.clone(), record.content),
-        (_, true) => paste_text(app.clone(), record.content),
-    }
-}
-
-pub fn copy_record_by_id(app: &AppHandle, id: &str) -> Result<(), String> {
-    run_record_action(app, id, false)
-}
-
-pub fn paste_record_by_id(app: &AppHandle, id: &str) -> Result<(), String> {
-    run_record_action(app, id, true)
 }

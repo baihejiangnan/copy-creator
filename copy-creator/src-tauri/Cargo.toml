@@ -1,6 +1,6 @@
 [package]
 name = "copy-creator"
-version = "0.2.24"
+version = "0.2.25"
 description = "PC clipboard manager, quick phrases, and translation tool"
 authors = ["Copy Creator Contributors"]
 license = "MIT"
@@ -15,8 +15,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2.6.1", features = [] }
 
+[features]
+# Opt-in QA only: statement counts/timing, never SQL text or bound values.
+diagnostics = ["rusqlite/trace"]
+
 [dependencies]
 serde_json = "1.0"
+sha2 = "0.10.9"
+semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.11.1", features = ["protocol-asset", "tray-icon"] }
@@ -31,17 +37,25 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 enigo = "0.3"
 base64 = "0.22"
+aes-gcm = "0.10.3"
+argon2 = "0.5.3"
+rand = "0.9.5"
+zeroize = "1.8.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Security_Cryptography",
   "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_System_DataExchange",
   "Win32_System_Memory",
+  "Win32_System_LibraryLoader",
   "Win32_System_Threading",
+  "Win32_System_Com",
   "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
   "Win32_UI_Accessibility",
 ] }
 tauri-plugin-process = "2.3.1"

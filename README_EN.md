@@ -1,5 +1,7 @@
 <div align="right">
 
+
+2026-10-07: Notes, shared save handling and performance improvements are in development. Some native flows and the accounting benchmark are verified; joint acceptance is still pending. See [TODO](docs/TODO.md) and [verification results and limits](docs/verification/2026-10-07-durability-pressure.md).
 English | [中文](./README.md)
 
 </div>
@@ -12,7 +14,7 @@ English | [中文](./README.md)
 
 **Desktop Productivity Tool for Windows**
 
-Clipboard Manager · Quick Phrases · Translation
+Clipboard Manager · Quick Phrases · Translation · Website Vault
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010+-brightgreen.svg)
@@ -25,7 +27,7 @@ Clipboard Manager · Quick Phrases · Translation
 
 ## Overview
 
-Copy Creator is a lightweight Windows desktop productivity tool that appears as a floating window and minimizes to the system tray when closed. It integrates three core features: clipboard history management, quick phrases, and translation, helping users improve text processing efficiency in their daily work.
+Copy Creator is a lightweight Windows desktop productivity tool that appears as a floating window and minimizes to the system tray when closed. It combines clipboard history, quick phrases, translation, and encrypted website account information.
 
 ## Screenshots
 
@@ -38,6 +40,11 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 ![Translation window showing sample English text and its Chinese translation](./docs/screenshots/translation.png)
 
 ## Features
+
+### Updates and About
+
+- About in the sidebar shows the project, installed version, license and repository links.
+- Settings → Updates and About share update checks, with an automatic startup check, release notes and a link to download updates from the release page. Downloads are installed manually.
 
 ### 📋 Clipboard Manager
 - Automatically records text and image copy history
@@ -56,12 +63,25 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 - **Built-in Translation**: Free translation service, ready to use out of the box
 - Local caching of translation results to avoid redundant requests
 
+### 🗝️ Website Vault
+
+- Store multiple accounts per website, including usernames, passwords, registration emails and phone numbers; search by website, URL, account, contact details or tags.
+- Generate 12–64 character passwords with selectable character groups and ambiguous-character exclusion; the default length is 24.
+- Add personal or work profile templates, arbitrary text fields and sensitive-field masking.
+- Record email / SMS verification contacts, recovery codes, security questions, authenticator or passkey locations, and custom verification methods.
+- Protect all website data with an independent master password using Argon2id and AES-256-GCM; master password changes re-encrypt records in a transaction.
+- Copy or fill individual values. Select the target input, open the app with its shortcut, and click Fill to return and paste. Pin the window for repeated fills.
+- Lock after five idle minutes or when the window is hidden or minimized. Private copies bypass this app's history, opt out of Windows history / cloud clipboard, and are cleared after 30 seconds if still owned by the vault.
+
+Available in source; the existing v0.2.24 download does not include this feature. See the [website vault guide](./docs/features/website-vault.md) for storage details.
+
 ### 🔒 Local API Key Protection
 
 - Translation and recognized or manually marked clipboard API keys are encrypted with Windows DPAPI for the current user.
-- Keys remain available for full-value paste. The settings view does not reveal saved translation keys, and new JSON exports omit protected keys.
+- Keys remain available for full-value paste. Settings do not reveal saved translation keys. Exports encrypt settings, favorites, API keys and the complete vault with a separate backup password, supporting cross-device restore, vault merging and legacy JSON imports. See [Encrypted backup and restore](./docs/features/encrypted-backup.md).
 
 ### ⚙️ System Features
+- Categorized settings with automatic saving, validated input and retry on failure
 - Global hotkey to show/hide window
 - Window always-on-top display
 - Light/Dark theme switching
@@ -119,6 +139,16 @@ Download the latest portable build from [this repository's Releases](https://git
 4. Click the translate button to get results
 5. For AI translation, please configure the API endpoint and key in settings
 
+### Website Vault
+
+1. Open “Website Vault” and choose an independent master password of any length, such as 6 characters. Empty or whitespace-only passwords are rejected. Forgotten master passwords cannot be recovered.
+2. Add an account, enter its website and account details, and optionally generate a password.
+3. Add profile and verification templates or define your own text fields.
+4. Search by website or account and open a record to view, copy or fill individual values. To fill, select the target input before opening the app with its shortcut.
+5. A copied value remains available for 30 seconds after hiding the window; new reads or copies require unlocking.
+
+Settings backups include all vault records; unlocking a restored vault still requires its master password. Vault images, TOTP code generation, cloud sync and a browser extension that detects form fields are outside the current feature.
+
 ### Personalization Settings
 
 - **Hotkeys**: Customize global hotkeys
@@ -168,12 +198,17 @@ copy-creator/
 │   ├── src/                # Rust source code
 │   └── Cargo.toml          # Rust dependency config
 ├── public/                 # Static assets
+├── assets-source/          # Original assets retained outside release output
 └── package.json            # Frontend dependency config
 ```
 
+## Agent Collaboration
+
+Agents should start with the root [AGENTS.md](AGENTS.md), which covers the project overview, code entry points, documentation paths, development constraints and validation commands.
+
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License.
 
 ---
 

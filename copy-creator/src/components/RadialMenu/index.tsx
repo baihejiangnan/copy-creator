@@ -13,6 +13,9 @@ type TabKey = "clipboard" | "phrases";
 
 const HOVER_DELAY = 500;
 const MAX_ITEMS = 2000;
+const EMPTY_RECORDS: ReturnType<typeof useClipboardStore.getState>["records"] = [];
+const EMPTY_GROUPS: ReturnType<typeof usePhraseStore.getState>["groups"] = [];
+const EMPTY_PHRASES: ReturnType<typeof usePhraseStore.getState>["phrases"] = [];
 
 function formatTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -25,25 +28,35 @@ function formatTime(dateStr: string): string {
 
 function ImageThumb({ recordId }: { recordId: string }) {
   const [src, setSrc] = useState("");
-  const { records, getThumbnail } = useClipboardStore();
+  const record = useClipboardStore((state) => state.records.find((r) => r.id === recordId));
+  const getThumbnail = useClipboardStore((state) => state.getThumbnail);
+  const [visible, setVisible] = useState(false);
+  const element = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    const record = records.find((r) => r.id === recordId);
-    if (!record || record.type !== "image") return;
-    let cancelled = false;
-    getThumbnail(record).then((url) => {
-      if (!cancelled && url) setSrc(url);
-    });
-    return () => { cancelled = true; };
-  }, [recordId, records, getThumbnail]);
+    if (!element.current) return;
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { rootMargin: "80px" });
+    observer.observe(element.current); return () => observer.disconnect();
+  }, []);
 
-  if (!src) return <span className="radial-menu-item-text">…</span>;
+  useEffect(() => {
+    if (!visible || !record || record.type !== "image") return;
+    const abort = new AbortController();
+    getThumbnail(record, abort.signal).then((url) => {
+      if (!abort.signal.aborted && url) setSrc(url);
+    });
+    return () => { abort.abort(); setSrc(""); };
+  }, [record, visible, getThumbnail]);
+
   return (
+    <span ref={element}>
+    {!visible || !src ? "…" :
     <img
       src={src}
       alt=""
       style={{ width: 48, height: 36, objectFit: "cover", borderRadius: 5 }}
     />
+    }</span>
   );
 }
 
@@ -87,9 +100,8 @@ export default function RadialMenu() {
       }
     }).catch(() => {});
 
-    // Pre-load data so it's ready when the menu first shows
+    // Install lightweight listeners; defer queries and images until shown.
     useClipboardStore.getState().init();
-    usePhraseStore.getState().init();
 
     // Listen for theme changes from the main window
     let unlistenTheme: UnlistenFn | undefined;
@@ -144,15 +156,16 @@ export default function RadialMenu() {
   const categorySwitch = useHoverSwitch(handleCategorySwitch, HOVER_DELAY);
 
   const navEnterRef = useRef(navSwitch.handleEnter);
-  navEnterRef.current = navSwitch.handleEnter;
   const navLeaveRef = useRef(navSwitch.handleLeave);
-  navLeaveRef.current = navSwitch.handleLeave;
   const catEnterRef = useRef(categorySwitch.handleEnter);
-  catEnterRef.current = categorySwitch.handleEnter;
   const catLeaveRef = useRef(categorySwitch.handleLeave);
-  catLeaveRef.current = categorySwitch.handleLeave;
+  useEffect(() => {
+    navEnterRef.current = navSwitch.handleEnter; navLeaveRef.current = navSwitch.handleLeave;
+    catEnterRef.current = categorySwitch.handleEnter; catLeaveRef.current = categorySwitch.handleLeave;
+  }, [navSwitch.handleEnter, navSwitch.handleLeave, categorySwitch.handleEnter, categorySwitch.handleLeave]);
 
   const resetState = useCallback(() => {
+    useClipboardStore.getState().setVisible(false);
     isRightDownRef.current = false;
     visibleRef.current = false;
     setVisible(false);
@@ -226,6 +239,8 @@ export default function RadialMenu() {
         startPosRef.current = { x: e.payload.x, y: e.payload.y };
         visibleRef.current = true;
         setVisible(true);
+        useClipboardStore.getState().setVisible(true);
+        usePhraseStore.getState().init();
         // Refresh records from backend to keep in sync with main window
         useClipboardStore.getState().loadRecords();
       });
@@ -326,19 +341,9 @@ export default function RadialMenu() {
     };
   }, [resetState, updateHoverFromPoint]);
 
-  const records = useClipboardStore((s) => s.records);
-  const phraseGroups = usePhraseStore((s) => s.groups);
-  const phrases = usePhraseStore((s) => s.phrases);
-  const loadPhrases = usePhraseStore((s) => s.loadPhrases);
-
-  useEffect(() => {
-    if (visible && activeTab === "phrases" && !phraseGroupId && phraseGroups.length > 0) {
-      const firstId = phraseGroups[0].id;
-      setPhraseGroupId(firstId);
-      phraseGroupIdRef.current = firstId;
-      loadPhrases(firstId);
-    }
-  }, [visible, activeTab, phraseGroupId, phraseGroups, loadPhrases]);
+  const records = useClipboardStore((s) => visible ? s.records : EMPTY_RECORDS);
+  const phraseGroups = usePhraseStore((s) => visible ? s.groups : EMPTY_GROUPS);
+  const phrases = usePhraseStore((s) => visible ? s.phrases : EMPTY_PHRASES);
 
   const filteredRecords = clipboardCategory === "all"
     ? records
@@ -381,8 +386,9 @@ export default function RadialMenu() {
         label: g.name,
       }));
 
-  const activeCategory = activeTab === "clipboard" ? clipboardCategory : phraseGroupId;
+  const activeCategory = activeTab === "clipboard" ? clipboardCategory : phraseGroupId ?? phraseGroups[0]?.id;
 
+  if (!visible) return null;
   return (
     <div className={`radial-menu-overlay${visible ? "" : " radial-menu-hidden"}`}>
       <div className="radial-menu-popup">

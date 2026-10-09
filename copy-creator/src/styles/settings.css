@@ -1,7 +1,3 @@
-/* === Settings Page === */
-.settings-panel-content {
-  padding: 0;
-}
 
 .settings-section {
   margin-bottom: 16px;
@@ -52,6 +48,69 @@
   font-weight: var(--weight-medium);
   color: var(--text-primary);
   white-space: nowrap;
+}
+
+.cleanup-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cleanup-filters:disabled .ios-select-trigger {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.cleanup-category-select .ios-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cleanup-category-select .ios-select-dropdown-inner {
+  max-height: 280px;
+  overscroll-behavior: contain;
+}
+
+.cleanup-category-select.open-above .ios-select-dropdown {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.cleanup-category-select .ios-select-trigger:focus-visible {
+  outline: 2px solid var(--text-secondary);
+  outline-offset: 2px;
+}
+
+.cleanup-category-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.cleanup-category-option:hover {
+  background: var(--input-bg);
+}
+
+.cleanup-category-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #34c759;
+}
+
+.cleanup-category-option:focus-within {
+  outline: 2px solid var(--text-secondary);
+  outline-offset: -2px;
 }
 
 .settings-lang-toggle {
@@ -547,3 +606,19 @@
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
+
+.settings-backup-form {
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.settings-backup-form p { margin: 0; line-height: 1.5; }
+.settings-backup-form label { display: flex; flex-direction: column; gap: 5px; }
+.settings-backup-form .settings-input { width: 100%; box-sizing: border-box; }
+.settings-backup-path { overflow-wrap: anywhere; }
+.settings-backup-preview { display: flex; flex-direction: column; gap: 10px; }
+.settings-backup-actions { display: flex; gap: 8px; }

@@ -1,41 +1,128 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ClipboardPage from "./pages/ClipboardPage";
-import PhrasePage from "./pages/PhrasePage";
-import TranslationPage from "./pages/TranslationPage";
-import SettingsContent from "./components/SettingsContent";
+import VaultSession from "./components/VaultSession";
+import { useVaultStore } from "./stores/vaultStore";
+import ClipboardLimitDialog from "./components/ClipboardLimitDialog";
+import SettingsSaveStatus from "./components/SettingsSaveStatus";
+import { useSettingsEditorStore } from "./stores/settingsEditorStore";
+import { useUpdateStore } from "./stores/updateStore";
 import ApiKeyToast from "./components/ApiKeyToast";
 import { useSettingsStore } from "./stores/settingsStore";
 import { Icons } from "./components/Icons";
 import i18n from "./i18n";
+import { saveBarrier, startLifecycle } from "./lib/lifecycle";
+import LifecycleStatus from "./components/LifecycleStatus";
+import { refreshWindowVisibility } from "./lib/documentVisible";
+import { invokeStorage, getStorageIdentity, isCurrentStorageIdentity, onStorageIdentity, type StorageEvent } from "./lib/storageIdentity";
+const NotesPage = React.lazy(() => import("./pages/NotesPage"));
+const PhrasePage = React.lazy(() => import("./pages/PhrasePage"));
+const TranslationPage = React.lazy(() => import("./pages/TranslationPage"));
+const VaultPage = React.lazy(() => import("./pages/VaultPage"));
+const SettingsContent = React.lazy(() => import("./components/SettingsContent"));
+const AboutDialog = React.lazy(() => import("./components/AboutDialog"));
 
 const PANEL_MAP: Record<string, { titleKey: string; component: React.ReactNode }> = {
   clipboard: { titleKey: "tabs.clipboard", component: <ClipboardPage /> },
+  notes: { titleKey: "tabs.notes", component: <NotesPage /> },
   phrases: { titleKey: "tabs.phrases", component: <PhrasePage /> },
   translate: { titleKey: "tabs.translate", component: <TranslationPage /> },
+  vault: { titleKey: "tabs.vault", component: <VaultPage /> },
 };
 
 const NAV_ITEMS = [
   { panelType: "clipboard" },
+  { panelType: "notes" },
   { panelType: "phrases" },
   { panelType: "translate" },
+  { panelType: "vault" },
 ] as const;
 
 function App() {
+  const barrier = useSyncExternalStore(saveBarrier.subscribe, saveBarrier.getSnapshot);
   const { t } = useTranslation();
   const [activePanel, setActivePanel] = useState<string>("clipboard");
   const [unreadCount, setUnreadCount] = useState(0);
   const { themeMode, toggleTheme, loadSettings } = useSettingsStore();
   const [isPinned, setIsPinned] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [pasteFailed, setPasteFailed] = useState(false);
+  const updateAvailable = useUpdateStore((state) => state.result?.status === "available");
+  const settingsSaveFailed = useSettingsEditorStore((state) => Object.keys(state.errors).length > 0);
   const markReadInFlightRef = useRef<Promise<void> | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    let version = 0;
+    const clear = onStorageIdentity(() => {
+      version++;
+      setPasteFailed(false);
+    });
+    const unlisten = listen<StorageEvent<boolean>>("clipboard-paste-failed", ({ payload }) => {
+      if (disposed || payload?.value !== true || !isCurrentStorageIdentity(payload.storage_epoch)) return;
+      const current = ++version;
+      setPasteFailed(true);
+      const main = getCurrentWindow();
+      void main.show().then(() => {
+        if (!disposed && current === version && isCurrentStorageIdentity(payload.storage_epoch)) return main.setFocus();
+      }).catch(() => {});
+    });
+    return () => {
+      disposed = true;
+      clear();
+      void unlisten.then((stop) => stop()).catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activePanel !== "notes") return;
+    const shortcuts = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.isComposing || saveBarrier.getSnapshot().busy) return;
+      if (event.key.toLowerCase() !== "n" && event.key !== "Enter") return;
+      event.preventDefault();
+      const create = event.key.toLowerCase() === "n";
+      void import("./stores/notesWorkspace").then(async ({ useNotesWorkspace }) => {
+        await useNotesWorkspace.getState().initialize();
+        const workspace = useNotesWorkspace.getState();
+        if (create) workspace.create();
+        else if (workspace.selectedId) await workspace.coordinator?.flush(workspace.selectedId).catch(workspace.setError);
+      });
+    };
+    window.addEventListener("keydown", shortcuts);
+    return () => window.removeEventListener("keydown", shortcuts);
+  }, [activePanel]);
+
+  useEffect(() => {
+    const openNote = (event: Event) => {
+      const id = (event as CustomEvent<{ id: string }>).detail?.id;
+      if (typeof id !== "string") return;
+      React.startTransition(() => setActivePanel("notes"));
+      void import("./stores/notesWorkspace").then(async ({ useNotesWorkspace }) => {
+        await useNotesWorkspace.getState().initialize(); await useNotesWorkspace.getState().open(id);
+      });
+    };
+    window.addEventListener("open-note", openNote);
+    return () => window.removeEventListener("open-note", openNote);
+  }, []);
+
+  useEffect(() => {
+    void useUpdateStore.getState().start();
+    void startLifecycle().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (activePanel !== "vault") useVaultStore.getState().clearSelected();
+  }, [activePanel]);
 
   const markClipboardRead = useCallback(() => {
     if (markReadInFlightRef.current) return markReadInFlightRef.current;
-    const request = invoke<void>("mark_clipboard_read")
-      .then(() => setUnreadCount(0))
+    const request = getStorageIdentity().then(async (epoch) => {
+      await invokeStorage<void>("mark_clipboard_read");
+      if (isCurrentStorageIdentity(epoch)) setUnreadCount(0);
+    })
       .catch((e) => console.error("Failed to mark clipboard as read:", e))
       .finally(() => {
         markReadInFlightRef.current = null;
@@ -58,13 +145,23 @@ function App() {
   useEffect(() => {
     let disposed = false;
     const cleanup: Array<() => void> = [];
-    invoke<number>("get_clipboard_unread_count")
-      .then((count) => {
-        if (!disposed) setUnreadCount(count);
-      })
-      .catch(console.error);
-    listen<number>("clipboard-unread-changed", (event) => {
-      if (!disposed) setUnreadCount(event.payload);
+    let version = 0;
+    const refreshUnread = async () => {
+      const current = ++version;
+      const epoch = await getStorageIdentity();
+      const count = await invoke<number>("get_clipboard_unread_count");
+      if (!disposed && current === version && isCurrentStorageIdentity(epoch)) setUnreadCount(count);
+    };
+    cleanup.push(onStorageIdentity(() => {
+      setUnreadCount(0);
+      void refreshUnread().catch(console.error);
+    }));
+    void refreshUnread().catch(console.error);
+    listen<StorageEvent<number>>("clipboard-unread-changed", ({ payload }) => {
+      if (!disposed && isCurrentStorageIdentity(payload?.storage_epoch)) {
+        version++;
+        setUnreadCount(payload.value);
+      }
     }).then((unlisten) => {
       if (disposed) unlisten();
       else cleanup.push(unlisten);
@@ -164,14 +261,21 @@ function App() {
     };
   }, []);
 
-  const handleSettingsClick = () => setActivePanel("settings");
+  const handleSettingsClick = () => React.startTransition(() => setActivePanel("settings"));
 
   const handleHide = async () => {
-    await getCurrentWindow().hide();
+    void saveBarrier.hintFlush();
+    const vault = useVaultStore.getState();
+    if (vault.status?.unlocked || vault.busy) await vault.lock();
+    await invoke("hide_main_window");
   };
 
   const handleMinimize = async () => {
+    void saveBarrier.hintFlush();
+    const vault = useVaultStore.getState();
+    if (vault.status?.unlocked || vault.busy) await vault.lock();
     await getCurrentWindow().minimize();
+    await refreshWindowVisibility();
   };
 
   const handleTogglePin = async () => {
@@ -188,6 +292,7 @@ function App() {
 
   return (
     <>
+    <div inert={barrier.busy} style={{ display: "contents" }}>
     <div className="app-container">
       <div
         ref={sidebarRef}
@@ -214,7 +319,7 @@ function App() {
                 key={item.panelType}
                 className={`sidebar-nav-item ${isActive ? "active" : ""}`}
                 onClick={() => {
-                  setActivePanel(item.panelType);
+                  React.startTransition(() => setActivePanel(item.panelType));
                   if (item.panelType === "clipboard") markClipboardRead();
                 }}
                 title={t(titleKey)}
@@ -234,6 +339,16 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
+          <button className={`sidebar-footer-item ${aboutOpen ? "active" : ""}`}
+            onClick={() => setAboutOpen(true)}
+            title={updateAvailable ? t("updates.sidebarAvailable") : t("about.title")}
+            aria-label={t("about.title")} aria-haspopup="dialog">
+            <span className="sidebar-footer-icon about-sidebar-icon">
+              {Icons.about}
+              {updateAvailable && <span className="update-dot" />}
+            </span>
+            <span className="sidebar-footer-label">{t("about.title")}</span>
+          </button>
           <button
             className={`sidebar-footer-item ${isSettingsPanel ? "active" : ""}`}
             onClick={handleSettingsClick}
@@ -302,15 +417,30 @@ function App() {
           </div>
         </div>
         <div className="panel-window-body">
+          <React.Suspense fallback={<span role="status">{t("notes.loading")}</span>}>
           {isSettingsPanel ? (
             <SettingsContent embedded />
           ) : (
             panelInfo?.component
           )}
+          </React.Suspense>
         </div>
       </div>
     </div>
     <ApiKeyToast />
+    <VaultSession />
+    <ClipboardLimitDialog />
+    {pasteFailed && <div className="clipboard-paste-toast" role="alert">
+      <span>{t("clipboard.pasteFailed")}</span>
+      <button className="project-link" onClick={() => setPasteFailed(false)}>{t("common.close")}</button>
+    </div>}
+    {settingsSaveFailed && !isSettingsPanel && <div className="settings-save-toast">
+      <SettingsSaveStatus />
+      <button className="project-link" onClick={handleSettingsClick}>{t("settings.title")}</button>
+    </div>}
+    {aboutOpen && <React.Suspense fallback={null}><AboutDialog onClose={() => setAboutOpen(false)} /></React.Suspense>}
+    </div>
+    <LifecycleStatus />
     </>
   );
 }

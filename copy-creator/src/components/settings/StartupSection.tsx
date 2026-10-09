@@ -18,6 +18,7 @@ export function StartupSection({
         <div className="settings-row">
           <div className="settings-row-label">{t("settings.startup")}</div>
           <button
+            role="switch" aria-checked={localAutostart} aria-label={t("settings.startup")}
             className={`toggle-switch ${localAutostart ? "on" : "off"}`}
             onClick={() => setLocalAutostart(!localAutostart)}
             title={localAutostart ? t("common.on") : t("common.off")}

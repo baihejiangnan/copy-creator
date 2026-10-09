@@ -1,6 +1,8 @@
 import { useTranslation } from "react-i18next";
+import SettingsFieldError from "../SettingsFieldError";
 
 interface ShortcutSectionProps {
+  error?: string;
   localShortcutKey: string;
   setLocalShortcutKey: (key: string) => void;
   recording: boolean;
@@ -17,6 +19,7 @@ export function ShortcutSection({
   stopRecording,
   localRadialMenuEnabled,
   setLocalRadialMenuEnabled,
+  error,
 }: ShortcutSectionProps) {
   const { t } = useTranslation();
 
@@ -46,6 +49,7 @@ export function ShortcutSection({
             <span className="radial-shortcut-key">{t("settings.radialShortcutDesc")}</span>
             <button
               className={`toggle-switch ${localRadialMenuEnabled ? "on" : "off"}`}
+              role="switch" aria-checked={localRadialMenuEnabled} aria-label={t("settings.radialShortcut")}
               onClick={() => setLocalRadialMenuEnabled(!localRadialMenuEnabled)}
               title={localRadialMenuEnabled ? t("common.on") : t("common.off")}
             >
@@ -54,6 +58,7 @@ export function ShortcutSection({
           </div>
         </div>
       </div>
+      <SettingsFieldError field="shortcut_key" error={error} />
     </div>
   );
 }

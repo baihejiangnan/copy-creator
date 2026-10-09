@@ -1,0 +1,38 @@
+// Explicit QA-only WebView memory target experiment; never suspend JS.
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const {spawn,execFileSync}=require('node:child_process'),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const root=path.resolve(__dirname,'../output/optimization/QA-notes-20261007'),wait=ms=>new Promise(r=>setTimeout(r,ms));
+const distribution=values=>{const s=[...values].sort((a,b)=>a-b);return {samples:s.length,p50:s[Math.ceil(s.length*.5)-1],p95:s[Math.ceil(s.length*.95)-1],max:s.at(-1)}};
+(async()=>{
+ const metadata=path.join(root,'process.json'),info=JSON.parse(fs.readFileSync(metadata,'utf8').replace(/^\uFEFF/,''));assert.equal(info.identifier,'com.copycreator.qa20261007');assert.equal(info.nativeArtifact,'native-release-memory-target-candidate');assert.equal(info.pasteIsolation,'identifier');assert.equal(info.autostartIsolation,'identifier');assert.equal(crypto.createHash('sha256').update(fs.readFileSync(info.exe)).digest('hex'),info.sha256.toLowerCase());
+ const browser=await chromium.connectOverCDP(process.env.QA_CDP_URL);let page;for(let i=0;i<100;i++){for(const p of browser.contexts().flatMap(c=>c.pages()).filter(p=>p.url()==='http://tauri.localhost/'))if(await p.evaluate(()=>performance.timeOrigin).catch(()=>0)>=info.launchStartedUnixMs-200){page=p;break}if(page)break;await wait(100)}assert.ok(page);page.setDefaultTimeout(15000);
+ const invoke=async(command,args={})=>{const r=await page.evaluate(async({command,args})=>{try{return {ok:true,value:await window.__TAURI_INTERNALS__.invoke(command,args)}}catch(error){return {ok:false,error}}},{command,args});if(!r.ok)throw r.error;return r.value};
+ assert.equal(require('./qa-path.cjs')(await invoke('get_storage_path')),require('./qa-path.cjs')(info.storageRoot));
+ const destination=path.join(root,'reports','memory-target-'+Date.now()+'.json'),prefix=destination.slice(0,-5),phase=prefix+'.phase',stop=prefix+'.stop',raw=prefix+'.jsonl',id=crypto.randomUUID(),epoch=await invoke('get_storage_epoch');
+ const report={started:new Date().toISOString(),app:info,phases:[],scope:'Same candidate EXE, corpus, pages and WebView profile; alternating hidden Normal/Low targets. No GC forcing, cache clearing, working-set trimming or TrySuspend. External native/all-descendant sampler; CDP connected. Each 30-second phase is a time series, not independent launches. Explicit Normal restored before showing. Three wake samples cannot establish P95. Experimental commands never included in default source.'};let monitor,monitorExit,created=false;
+ const record=()=>fs.writeFileSync(destination,JSON.stringify(report,null,2));
+ const target=async low=>{const result=await invoke('qa_memory_target',{low});assert.ok(result.length>=1&&result.every(([label,accepted])=>['main','radial'].includes(label)&&accepted));return result};
+ try{
+  await invoke('plugin:window|show',{label:'main'});await invoke('plugin:window|set_focus',{label:'main'});await assert.rejects(invoke('qa_memory_target',{low:true}),e=>String(e).includes('hidden'));
+  await page.locator('.sidebar-nav').getByRole('button',{name:/^(便签|Notes)$/}).click();await page.locator('.notes-page').waitFor();await page.waitForFunction(()=>performance.getEntriesByType('resource').some(e=>/\/notesWorkspace-[^/]+\.js$/.test(e.name)));
+  await invoke('create_note',{expectedStorageEpoch:epoch,id,mutationId:crypto.randomUUID(),draft:{title:'QA memory target '+id,body:'QA initial memory control',refs:[]}});created=true;
+  await page.evaluate(async id=>{const e=performance.getEntriesByType('resource').find(e=>/\/notesWorkspace-[^/]+\.js$/.test(e.name));const workspace=(await import(e.name)).useNotesWorkspace;await workspace.getState().initialize();await workspace.getState().open(id);window.__qaMemory={workspace};await document.fonts.ready},id);
+  fs.writeFileSync(phase,'settle');monitor=spawn(process.env.QA_PYTHON,[path.join(__dirname,'monitor-qa-processes.py'),metadata,raw,phase,stop,'360'],{windowsHide:true,stdio:['ignore','pipe','pipe']});let monitorError='';monitor.stderr.on('data',d=>monitorError+=d);const exited=monitorExit=new Promise((resolve,reject)=>{monitor.once('exit',code=>code===0?resolve():reject(Error(monitorError)))});exited.catch(()=>{});
+  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Sampler readiness timeout')),10000);monitor.stdout.once('data',d=>{clearTimeout(timer);try{assert.equal(JSON.parse(d).ready,true);resolve()}catch(e){reject(e)}});monitor.once('error',reject)});
+  await invoke('plugin:window|hide',{label:'main'});
+  for(let index=0;index<7;index++){
+   const low=index%2===1,name=(low?'hidden-low-':'hidden-normal-')+index;fs.writeFileSync(phase,'settle-'+index);const accepted=await target(low);
+   if(low){const body='QA hidden low autosave '+crypto.randomUUID();await page.evaluate(({id,body})=>window.__qaMemory.workspace.getState().coordinator.edit(id,{body}),{id,body});await wait(3500);assert.equal((await invoke('get_note',{expectedStorageEpoch:epoch,id})).value.body,body);}
+   await wait(5000);fs.writeFileSync(phase,name);await wait(30000);const row={phase:name,low,accepted,hiddenAutosavePassed:low||undefined};report.phases.push(row);record();console.log(JSON.stringify({phase:name,sampledSeconds:30,hiddenAutosavePassed:row.hiddenAutosavePassed}));
+   if(low){await target(false);row.wakeMs=await page.evaluate(async()=>{const start=performance.now();await window.__TAURI_INTERNALS__.invoke('plugin:window|show',{label:'main'});await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));if(!document.querySelector('.cm-content')?.getClientRects().length)throw Error('Editor absent after wake');return performance.now()-start});await invoke('plugin:window|hide',{label:'main'});record();}
+  }
+  fs.writeFileSync(stop,'done');await exited;monitor=null;const rows=fs.readFileSync(raw,'utf8').trim().split('\n').map(JSON.parse);
+  for(const item of report.phases){const group=rows.filter(r=>r.phase===item.phase);assert.ok(group.length>=100);item.durationSeconds=(group.at(-1).elapsedMs-group[0].elapsedMs)/1000;item.treePrivateBytes=distribution(group.map(r=>r.privateBytes));item.treeWorkingSetBytes=distribution(group.map(r=>r.workingSet));item.nativePrivateBytes=distribution(group.map(r=>r.processes.find(p=>p.pid===info.pid).privateBytes));item.processCounts=[...new Set(group.map(r=>r.processes.length))];}
+  report.raw=path.relative(root,raw);report.passed=true;
+ }catch(error){report.error=error.stack||String(error);throw error}
+ finally{
+  try{if(monitor){fs.writeFileSync(stop,'stop');await monitorExit}await target(false);if(created){await page.evaluate(id=>window.__qaMemory?.workspace.getState().coordinator.flush(id),id);const note=(await invoke('get_note',{expectedStorageEpoch:epoch,id})).value;await invoke('set_note_state',{expectedStorageEpoch:epoch,id,expectedRevision:note.revision,mutationId:crypto.randomUUID(),action:'delete'});execFileSync(process.env.QA_PYTHON,[path.join(__dirname,'qa-storage-fixture.py')],{input:JSON.stringify({action:'remove_memory_note',database:path.join(info.storageRoot,'data.db'),id}),encoding:'utf8',env:{...process.env,PYTHONUTF8:'1'},windowsHide:true});}report.normalTargetRestored=true;}
+  catch(error){report.cleanupError=error.message||String(error);report.passed=false;}
+  finally{report.finished=new Date().toISOString();record();await browser.close();console.log(JSON.stringify({passed:report.passed||false,report:destination}));}
+ }
+})().catch(e=>{console.error(e.stack||String(e));process.exitCode=1});

@@ -1,6 +1,8 @@
-import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
+import { invokeStorage, onStorageIdentity, isCurrentStorageIdentity, type StorageEvent } from "../lib/storageIdentity";
+import { LatestQuery } from "../lib/latestQuery";
 
 interface PhraseGroup {
   id: string;
@@ -51,6 +53,13 @@ interface PhraseState {
 
 export const usePhraseStore = create<PhraseState>()((set, get) => {
   let initialized = false;
+  let generation = 0, detailGeneration = 0;
+  const groupQueries = new LatestQuery<PhraseGroup[]>(), phraseQueries = new LatestQuery<Phrase[]>();
+  onStorageIdentity(() => {
+    generation++; detailGeneration++;
+    set({ groups: [], phrases: [], selectedGroupId: null, loading: false });
+    if (initialized) void get().loadGroups();
+  });
 
   return {
   groups: [],
@@ -63,8 +72,10 @@ export const usePhraseStore = create<PhraseState>()((set, get) => {
   setSelectedGroup: (id: string | null) => set({ selectedGroupId: id }),
 
   loadGroups: async () => {
+    const current = generation;
     try {
-      const groups = await invoke<PhraseGroup[]>("get_phrase_groups");
+      const groups = await groupQueries.run(String(current), () => invoke<PhraseGroup[]>("get_phrase_groups"));
+      if (!groups || current !== generation) return;
       set({ groups });
       if (groups.length > 0 && !get().selectedGroupId) {
         get().loadPhrases(groups[0].id);
@@ -78,37 +89,43 @@ export const usePhraseStore = create<PhraseState>()((set, get) => {
     if (initialized) return;
     initialized = true;
 
-    listen("phrase-groups-changed", () => {
-      get().loadGroups();
+    listen<StorageEvent<null>>("phrase-groups-changed", ({ payload }) => {
+      if (isCurrentStorageIdentity(payload?.storage_epoch)) void get().loadGroups();
     });
 
     get().loadGroups();
   },
 
   loadPhrases: async (groupId: string) => {
+    const current = generation, detail = ++detailGeneration;
     set({ loading: true });
     try {
-      const phrases = await invoke<Phrase[]>("get_phrases", { groupId });
+      const phrases = await phraseQueries.run(`${current}:${groupId}`, () => invoke<Phrase[]>("get_phrases", { groupId }));
+      if (!phrases || current !== generation || detail !== detailGeneration) return;
       set({ phrases, selectedGroupId: groupId });
     } catch (e) {
       console.error("Failed to load phrases:", e);
     } finally {
-      set({ loading: false });
+      if (current === generation && detail === detailGeneration) set({ loading: false });
     }
   },
 
   createGroup: async (name: string) => {
+    const current = generation;
     try {
-      const group = await invoke<PhraseGroup>("create_phrase_group", { name });
-      set({ groups: [...get().groups, group] });
+      const group = await invokeStorage<PhraseGroup>("create_phrase_group", { name });
+      if (current !== generation) return;
+      set({ groups: [...get().groups.filter((existing) => existing.id !== group.id), group] });
     } catch (e) {
       console.error("Failed to create group:", e);
     }
   },
 
   updateGroup: async (id: string, name: string) => {
+    const current = generation;
     try {
-      await invoke("update_phrase_group", { id, name });
+      await invokeStorage("update_phrase_group", { id, name });
+      if (current !== generation) return;
       set({
         groups: get().groups.map((g) => (g.id === id ? { ...g, name } : g)),
       });
@@ -118,8 +135,10 @@ export const usePhraseStore = create<PhraseState>()((set, get) => {
   },
 
   deleteGroup: async (id: string) => {
+    const current = generation;
     try {
-      await invoke("delete_phrase_group", { id });
+      await invokeStorage("delete_phrase_group", { id });
+      if (current !== generation) return;
       set({
         groups: get().groups.filter((g) => g.id !== id),
         phrases:
@@ -133,21 +152,25 @@ export const usePhraseStore = create<PhraseState>()((set, get) => {
   },
 
   createPhrase: async (groupId: string, title: string, content: string) => {
+    const current = generation;
     try {
-      const phrase = await invoke<Phrase>("create_phrase", {
+      const phrase = await invokeStorage<Phrase>("create_phrase", {
         groupId,
         title,
         content,
       });
-      set({ phrases: [...get().phrases, phrase] });
+      if (current !== generation || get().selectedGroupId !== groupId) return;
+      set({ phrases: [...get().phrases.filter((existing) => existing.id !== phrase.id), phrase] });
     } catch (e) {
       console.error("Failed to create phrase:", e);
     }
   },
 
   updatePhrase: async (id: string, title: string, content: string) => {
+    const current = generation;
     try {
-      await invoke("update_phrase", { id, title, content });
+      await invokeStorage("update_phrase", { id, title, content });
+      if (current !== generation) return;
       set({
         phrases: get().phrases.map((p) =>
           p.id === id ? { ...p, title, content } : p
@@ -159,8 +182,10 @@ export const usePhraseStore = create<PhraseState>()((set, get) => {
   },
 
   deletePhrase: async (id: string) => {
+    const current = generation;
     try {
-      await invoke("delete_phrase", { id });
+      await invokeStorage("delete_phrase", { id });
+      if (current !== generation) return;
       set({ phrases: get().phrases.filter((p) => p.id !== id) });
     } catch (e) {
       console.error("Failed to delete phrase:", e);
@@ -169,7 +194,7 @@ export const usePhraseStore = create<PhraseState>()((set, get) => {
 
   pastePhrase: async (phrase: Phrase) => {
     try {
-      await invoke("paste_text", { text: phrase.content });
+      await invokeStorage("paste_text", { text: phrase.content });
     } catch (e) {
       console.error("Paste failed:", e);
     }

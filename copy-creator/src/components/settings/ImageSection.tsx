@@ -6,6 +6,7 @@ interface ImageSectionProps {
   setMaxDimension: (value: number) => void;
   compressionQuality: number;
   setCompressionQuality: (value: number) => void;
+  onCommitCompression: (value: number) => void;
   largeImageHandling: string;
   setLargeImageHandling: (value: string) => void;
 }
@@ -15,6 +16,7 @@ export function ImageSection({
   setMaxDimension,
   compressionQuality,
   setCompressionQuality,
+  onCommitCompression,
   largeImageHandling,
   setLargeImageHandling,
 }: ImageSectionProps) {
@@ -51,6 +53,11 @@ export function ImageSection({
               step={5}
               value={compressionQuality}
               onChange={(event) => setCompressionQuality(Number(event.target.value))}
+              onPointerUp={(event) => onCommitCompression(Number(event.currentTarget.value))}
+              onKeyUp={(event) => {
+                if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) onCommitCompression(Number(event.currentTarget.value));
+              }}
+              onBlur={(event) => onCommitCompression(Number(event.currentTarget.value))}
               aria-label={t("settings.imageCompressionQuality")}
             />
             <span>{compressionQuality}%</span>

@@ -13,23 +13,28 @@ pub async fn translate(
     app: tauri::AppHandle,
     text: String,
     target_lang: String,
+    expected_storage_epoch: Option<u64>,
 ) -> Result<TranslateResponse, String> {
     let source_lang = "auto".to_string();
 
     let state = app.state::<crate::db::DbState>();
-    let engine = {
+    let (engine, storage_epoch) = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
+        crate::lifecycle::allow_write(&app)?;
+        crate::db::require_storage_epoch(&app, expected_storage_epoch)?;
+        let engine = conn.query_row(
             "SELECT value FROM settings WHERE key = 'default_translate_engine'",
             [],
             |row| row.get::<_, String>(0),
         )
-        .unwrap_or_else(|_| "google".to_string())
+        .unwrap_or_else(|_| "google".to_string());
+        (engine, state.storage_epoch.load(std::sync::atomic::Ordering::Relaxed))
     };
 
     // Check cache
     {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        crate::db::require_storage_epoch(&app, Some(storage_epoch))?;
         let cached: Option<String> = conn
             .query_row(
                 "SELECT target_text FROM translation_history WHERE source_text = ?1 AND target_lang = ?2 AND engine = ?3 ORDER BY created_at DESC LIMIT 1",
@@ -47,14 +52,16 @@ pub async fn translate(
     }
 
     let result = if engine == "ai" {
-        translate_ai(&app, &text, &source_lang, &target_lang).await?
+        translate_ai(&app, &text, &source_lang, &target_lang, storage_epoch).await?
     } else {
-        translate_google(&app, &text, &source_lang, &target_lang).await?
+        translate_google(&app, &text, &source_lang, &target_lang, storage_epoch).await?
     };
 
     // Save to history/cache
     {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        crate::lifecycle::allow_write(&app)?;
+        if storage_epoch != state.storage_epoch.load(std::sync::atomic::Ordering::Relaxed) { return Err("notes.storageChanged".into()); }
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
@@ -73,10 +80,12 @@ async fn translate_ai(
     text: &str,
     source_lang: &str,
     target_lang: &str,
+    storage_epoch: u64,
 ) -> Result<TranslateResponse, String> {
     let state = app.state::<crate::db::DbState>();
     let (api_url, api_key, model) = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        crate::db::require_storage_epoch(app, Some(storage_epoch))?;
         let url: String = conn.query_row(
             "SELECT value FROM settings WHERE key = 'ai_api_url'", [], |r| r.get(0),
         ).unwrap_or_default();
@@ -154,10 +163,12 @@ async fn translate_google(
     text: &str,
     _source_lang: &str,
     target_lang: &str,
+    storage_epoch: u64,
 ) -> Result<TranslateResponse, String> {
     let state = app.state::<crate::db::DbState>();
     let (api_key, proxy_url): (String, String) = {
         let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        crate::db::require_storage_epoch(app, Some(storage_epoch))?;
         let key: String = conn.query_row(
             "SELECT value FROM settings WHERE key = 'google_api_key'", [], |r| r.get(0),
         ).unwrap_or_default();

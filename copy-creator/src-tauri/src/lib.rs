@@ -1,10 +1,30 @@
 mod clipboard;
+mod clipboard_wake;
 mod secrets;
 mod db;
 mod paste;
 mod shortcut;
 mod translator;
 mod tray;
+mod vault;
+mod vault_crypto;
+mod backup;
+mod updates;
+mod notes;
+mod lifecycle;
+mod storage;
+mod storage_events;
+mod note_backup;
+mod backup_limits;
+mod note_files;
+mod clipboard_usage;
+mod db_metrics;
+mod maintenance;
+#[cfg(test)]
+mod db_benchmarks;
+mod note_search;
+#[cfg(test)]
+mod note_search_tests;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -14,6 +34,17 @@ use tauri_plugin_autostart::ManagerExt;
 
 static MAIN_WINDOW_PINNED: AtomicBool = AtomicBool::new(false);
 static LAST_MINIMIZED_AT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static NATIVE_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
+// One native picker for the whole app. The callback owns this guard so an IPC
+// timeout cannot release admission/auto-hide protection while its modal window
+// is still alive. Parent ownership also handles transient foreground changes.
+pub(crate) struct NativeDialogScope;
+impl NativeDialogScope {
+    pub(crate) fn new() -> Option<Self> { NATIVE_DIALOG_OPEN.compare_exchange(false,true,Ordering::SeqCst,Ordering::SeqCst).ok().map(|_|Self) }
+}
+impl Drop for NativeDialogScope {
+    fn drop(&mut self) { NATIVE_DIALOG_OPEN.store(false, Ordering::SeqCst); }
+}
 
 #[cfg(target_os = "windows")]
 fn apply_backdrop_effect(window: &tauri::WebviewWindow) {
@@ -83,10 +114,24 @@ fn cursor_is_inside_window(window: &tauri::WebviewWindow) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn foreground_belongs_to_window(window: &tauri::WebviewWindow) -> bool {
+    use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOTOWNER}};
+    let Ok(raw) = window.hwnd() else { return true; };
+    unsafe {
+        let foreground = GetForegroundWindow();
+        !foreground.is_invalid() && GetAncestor(foreground, GA_ROOTOWNER) == HWND(raw.0)
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn install_auto_hide_on_focus_loss(window: &tauri::WebviewWindow) {
     let event_window = window.clone();
     window.on_window_event(move |event| {
         match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = lifecycle::hide_main(&event_window);
+            }
             tauri::WindowEvent::Focused(true) => {
                 // Focus gained — clear the minimise timestamp so future
                 // Focused(false) events go through the normal auto-hide path.
@@ -96,6 +141,7 @@ fn install_auto_hide_on_focus_loss(window: &tauri::WebviewWindow) {
             }
             tauri::WindowEvent::Focused(false) => {
                 if MAIN_WINDOW_PINNED.load(Ordering::SeqCst)
+                    || NATIVE_DIALOG_OPEN.load(Ordering::SeqCst)
                     || cursor_is_inside_window(&event_window)
                 {
                     return;
@@ -132,12 +178,14 @@ fn install_auto_hide_on_focus_loss(window: &tauri::WebviewWindow) {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(250));
                     if MAIN_WINDOW_PINNED.load(Ordering::SeqCst)
+                        || NATIVE_DIALOG_OPEN.load(Ordering::SeqCst)
                         || window.is_minimized().unwrap_or(false)
                         || window.is_focused().unwrap_or(false)
+                        || foreground_belongs_to_window(&window)
                     {
                         return;
                     }
-                    if let Err(error) = window.hide() {
+                    if let Err(error) = lifecycle::hide_main(&window) {
                         log::warn!("failed to hide unfocused main window: {error}");
                     }
                 });
@@ -161,14 +209,19 @@ fn toggle_always_on_top(app: tauri::AppHandle) -> Result<bool, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    let autostart_name = autostart_entry_name(
+        &context.package_info().name,
+        &context.config().identifier,
+    );
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--hidden"]),
-        ))
+        .plugin(tauri_plugin_autostart::Builder::new()
+            .app_name(autostart_name)
+            .arg("--hidden")
+            .build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -180,7 +233,19 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            if cfg!(debug_assertions) {
+            if cfg!(feature = "diagnostics") {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Warn)
+                        .level_for("copy_creator::metrics", log::LevelFilter::Debug)
+                        .targets([tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                            file_name: Some("db-metrics".into()),
+                        }).filter(|metadata| metadata.target() == "copy_creator::metrics")])
+                        .max_file_size(2_000_000)
+                        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                        .build(),
+                )?;
+            } else if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)
@@ -203,6 +268,9 @@ pub fn run() {
             let is_autostart = std::env::args().any(|a| a == "--hidden");
 
             db::init_db(app.handle())?;
+            app.manage(vault::VaultState::default());
+            app.manage(backup::BackupState::default());
+            app.manage(lifecycle::LifecycleState::default());
             db::enforce_clipboard_limits(app.handle()).ok();
 
             // Repair autostart registry entry to ensure --hidden arg is present
@@ -211,22 +279,14 @@ pub fn run() {
                 let _ = autostart.enable();
             }
 
-            // Periodic pruning every hour
-            let prune_handle = app.handle().clone();
-            std::thread::Builder::new()
-                .name("clipboard-prune-worker".to_string())
-                .spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(3600));
-                    if let Err(error) = db::prune_old_records(&prune_handle) {
-                        log::warn!("periodic clipboard pruning failed: {error}");
-                    }
-                })?;
+            maintenance::start(app.handle())?;
 
             app.handle().manage(tray::TrayState {
                 tray: std::sync::Mutex::new(None),
             });
             tray::create_tray(app.handle())?;
             db::prune_old_records(app.handle()).ok();
+            let _ = notes::prune_expired(app.handle());
 
             clipboard::start_monitor(app.handle())?;
 
@@ -239,7 +299,7 @@ pub fn run() {
                 let radial = WebviewWindowBuilder::new(
                     app,
                     "radial-menu",
-                    WebviewUrl::App("index.html?radial=1".into()),
+                    WebviewUrl::App("radial.html".into()),
                 )
                 .title("")
                 .inner_size(300.0, 420.0)
@@ -271,16 +331,51 @@ pub fn run() {
             // Show main window when not auto-started (after all init is done)
             if !is_autostart {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
+                    let _ = lifecycle::show_main(&window);
                 }
             }
 
+            vault::start_lock_worker(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            lifecycle::hide_main_window,
+            lifecycle::lifecycle_ready,
+            lifecycle::lifecycle_saved,
+            lifecycle::lifecycle_cancel,
+            lifecycle::request_app_restart,
+            lifecycle::begin_storage_operation,
+            lifecycle::end_storage_operation,
+            db::change_storage_directory,
+            db::get_storage_epoch,
+            notes::list_notes,
+            notes::get_note,
+            notes::create_note,
+            notes::save_note,
+            notes::set_note_state,
+            notes::capture_clipboard_as_note,
+            note_files::select_note_files,
+            note_files::reveal_note_reference,
+            vault::get_vault_status,
+            vault::setup_vault,
+            vault::unlock_vault,
+            vault::lock_vault,
+            vault::touch_vault,
+            vault::list_vault_entries,
+            vault::get_vault_entry,
+            vault::save_vault_entry,
+            vault::delete_vault_entry,
+            vault::generate_vault_password,
+            vault::copy_vault_field,
+            vault::paste_vault_field,
+            vault::copy_vault_generated_password,
+            vault::copy_vault_text,
+            vault::change_vault_master,
             db::get_clipboard_records,
             db::get_clipboard_record_content,
             clipboard::open_external_link,
+            updates::get_app_info,
+            updates::check_for_updates,
             db::delete_clipboard_record,
             db::toggle_clipboard_favorite,
             db::set_clipboard_favorite_note,
@@ -302,9 +397,14 @@ pub fn run() {
             db::get_setting,
             db::get_all_settings,
             db::set_setting,
+            db::save_clipboard_limit,
+            shortcut::save_shortcut,
             db::set_settings_batch,
-            db::export_user_data,
-            db::import_user_data,
+            backup::export_user_data,
+            backup::select_user_data_import,
+            backup::preview_user_data_import,
+            backup::import_user_data,
+            backup::cancel_user_data_import,
             paste::copy_text,
             paste::copy_image,
             paste::copy_file,
@@ -333,6 +433,42 @@ pub fn run() {
             db::set_user_api_key,
             toggle_always_on_top,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
+                log::debug!(target: "copy_creator::metrics", "operation=lifecycle stage=exit_requested approved={}", app.state::<lifecycle::LifecycleState>().approved_exit());
+                if !app.state::<lifecycle::LifecycleState>().approved_exit() {
+                    api.prevent_exit();
+                    lifecycle::request_exit(app, code.unwrap_or(0));
+                }
+            }
+            if matches!(event, tauri::RunEvent::Exit) {
+                log::debug!(target: "copy_creator::metrics", "operation=lifecycle stage=runtime_exit");
+            }
+        });
+}
+
+fn autostart_entry_name(product_name: &str, identifier: &str) -> String {
+    // The plugin keys Windows Run by name, not Tauri identifier. Keep the
+    // established production entry, but isolate alternate/QA identities.
+    if identifier == "com.copycreator.app" {
+        product_name.to_string()
+    } else {
+        format!("{product_name} ({identifier})")
+    }
+}
+
+#[cfg(test)]
+mod autostart_identity_tests {
+    #[test]
+    fn alternate_identifiers_cannot_repair_the_production_autostart_entry() {
+        let production = super::autostart_entry_name("Copy Creator", "com.copycreator.app");
+        assert_eq!(production, "Copy Creator");
+        let qa = super::autostart_entry_name("Copy Creator", "com.copycreator.qa20261007");
+        let search = super::autostart_entry_name("Copy Creator", "com.copycreator.qa20261007search");
+        assert_ne!(qa, production);
+        assert_ne!(search, production);
+        assert_ne!(qa, search);
+    }
 }
