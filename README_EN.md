@@ -73,7 +73,7 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 - Copy or fill individual values. Select the target input, open the app with its shortcut, and click Fill to return and paste. Pin the window for repeated fills.
 - Lock after five idle minutes or when the window is hidden or minimized. Private copies bypass this app's history, opt out of Windows history / cloud clipboard, and are cleared after 30 seconds if still owned by the vault.
 
-Available in source; the existing v0.2.24 download does not include this feature. See the [website vault guide](./docs/features/website-vault.md) for storage details.
+Included in the 0.2.25 portable release. See the [website vault guide](./docs/features/website-vault.md) for storage details.
 
 ### 🔒 Local API Key Protection
 
@@ -101,13 +101,13 @@ Available in source; the existing v0.2.24 download does not include this feature
 
 ## Download
 
-The 0.2.25 source is pushed and its portable EXE is uploaded to a draft Release; it is not public yet. Intermittent paste failures and some performance acceptance gaps remain. The publicly available stable download is still 0.2.24 below. See the [0.2.25 release record](./docs/verification/2026-10-09-release-025.md).
+0.2.25 is officially released with the user's explicit acceptance of known issues. Regular and tray paste may intermittently fail; memory targets and some joint acceptance checks remain unmet. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1) for backup requirements before upgrading, and the [0.2.25 release record](./docs/verification/2026-10-09-release-025.md) for verification limits.
 
-Download the latest portable build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.24-baihejiangnan.1):
+Download the latest portable build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1):
 
 | File | Description |
 |:---|:---|
-| [Copy-Creator-0.2.24-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.24-baihejiangnan.1/Copy-Creator-0.2.24-portable.exe) | Portable Windows executable; run without installation |
+| [Copy-Creator-0.2.25-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.25-baihejiangnan.1/Copy-Creator-0.2.25-portable.exe) | Windows x64 portable executable, 46.39 MB; run without installation |
 
 **System Requirements**: Windows 11
 

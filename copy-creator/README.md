@@ -1,5 +1,6 @@
 # Copy Creator
 
+0.2.25 已在用户明确接受已知问题后[正式发布](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1)。普通/托盘粘贴偶发失败、内存与部分验收缺口继续保留；构建、校验和边界见[发布记录](../docs/verification/2026-10-09-release-025.md)，任务 goal 保持暂停。
 
 2026-10-07：便签、共享保存与性能优化开发中，部分原生流程与容量统计对照已验证，联合验收尚未收齐；当前任务见 [TODO](../docs/TODO.md)，实测结果与限制见[验证记录](../docs/verification/2026-10-07-durability-pressure.md)。
 PC 端效率辅助工具 —— 剪切板管理、快捷短语、翻译和网站资料，桌面悬浮窗形态，关闭后驻留系统托盘。

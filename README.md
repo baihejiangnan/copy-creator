@@ -74,7 +74,7 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 - 单项资料支持「复制」和「填入」；先选中输入框，再呼出窗口点击「填入」，即可返回此前窗口粘贴。固定窗口可连续操作。
 - 空闲 5 分钟、隐藏或最小化窗口后锁定；复制内容不进入本应用历史，并设置 Windows 历史与云剪贴板排除标记，30 秒后按剪贴板归属清除。
 
-本功能已在源码中实现，现有 v0.2.24 下载包尚未包含。操作说明和存储边界见 [网站资料功能说明](./docs/features/website-vault.md)。
+本功能已包含在 0.2.25 便携版中。操作说明和存储边界见 [网站资料功能说明](./docs/features/website-vault.md)。
 
 ### 🔒 本地凭据保护
 
@@ -103,13 +103,13 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 
 ## 下载
 
-0.2.25 源码已推送，便携 EXE 已上传为 Release 草稿，尚未公开。连续粘贴及部分性能验收仍有缺口，当前可下载正式版仍为下列 0.2.24。详情见 [0.2.25 发布记录](./docs/verification/2026-10-09-release-025.md)。安装
+0.2.25 已在用户明确接受已知问题后正式发布。普通/托盘粘贴仍可能偶发失败，内存及部分联合验收尚未达标；详情和升级前备份要求见 [Release 说明](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1)及 [0.2.25 发布记录](./docs/verification/2026-10-09-release-025.md)。
 
-前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.24-baihejiangnan.1) 下载最新便携版：
+前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1) 下载最新便携版：
 
 | 文件 | 说明 |
 |:---|:---|
-| [Copy-Creator-0.2.24-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.24-baihejiangnan.1/Copy-Creator-0.2.24-portable.exe) | Windows 便携版，下载后直接运行，无需安装 |
+| [Copy-Creator-0.2.25-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.25-baihejiangnan.1/Copy-Creator-0.2.25-portable.exe) | Windows x64 便携版，46.39 MB，下载后直接运行，无需安装 |
 
 **系统要求**：Windows 11
 
