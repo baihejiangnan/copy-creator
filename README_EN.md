@@ -44,7 +44,7 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 ### Updates and About
 
 - About in the sidebar shows the project, installed version, license and repository links.
-- Settings → Updates and About share update checks. Development source now supports public metadata, signed downloads and user-selected upgrades. 0.2.26 is publicly released with `latest.json` and signatures for both packages; anonymous download and signature verification of the public metadata passed, while real-desktop and installation/upgrade acceptance are still outstanding. See [update details](./docs/features/updates.md).
+- Settings → Updates and About share update checks. From 0.2.28, updates download a signed MSI and save before exiting to install. Installed copies retain their directory, show upgrade progress and launch the new version on completion; About shows a red dot when an update is found. Real-desktop and installation/upgrade acceptance are still outstanding. See [update details](./docs/features/updates.md).
 
 ### 📋 Clipboard Manager
 - Automatically records text and image copy history
@@ -101,14 +101,14 @@ Included in the 0.2.26 portable release. See the [website vault guide](./docs/fe
 
 ## Download
 
-0.2.27 is published as the official Latest at the user's request to test checking, signed downloads and upgrading from 0.2.26 within the app. Only the application version changes; portable and MSI packages include signed metadata. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain; the user's actual upgrade result is pending. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.27-baihejiangnan.1) for backup requirements and the [0.2.27 test release record](./docs/verification/2026-10-10-release-027.md) for evidence and limits.
+0.2.28 is published as the official Latest at the user's request, with MSI updates and the About red dot. MSI and portable EXE packages include independent signatures and metadata. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.28-baihejiangnan.1) for backup requirements and the [0.2.28 release record](./docs/verification/2026-10-10-release-028.md) for evidence and limits.
 
-Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.27-baihejiangnan.1), or check and download within the app when running 0.2.26:
+Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.28-baihejiangnan.1). MSI is recommended. Older 0.2.26/0.2.27 portable clients still download an EXE: install this MSI manually once, then use the installed program. Checks for higher versions from this release use the new MSI flow:
 
 | File | Description |
 |:---|:---|
-| [Copy-Creator-0.2.27-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.27-baihejiangnan.1/Copy-Creator-0.2.27-portable.exe) | Windows x64 portable executable, 46.65 MB; run without installation |
-| [Copy-Creator_0.2.27_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.27-baihejiangnan.1/Copy-Creator_0.2.27_x64.msi) | Windows x64 installer, 34.96 MB; install location can be chosen |
+| [Copy-Creator_0.2.28_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.28-baihejiangnan.1/Copy-Creator_0.2.28_x64.msi) | Windows x64 installer, 34.97 MB; recommended, with a directory choice for first installation |
+| [Copy-Creator-0.2.28-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.28-baihejiangnan.1/Copy-Creator-0.2.28-portable.exe) | Windows x64 portable executable, 46.68 MB; manual download, runs without installation |
 
 **System Requirements**: Windows 11
 
@@ -116,7 +116,7 @@ Download the latest build from [this repository's Releases](https://github.com/b
 
 ### Getting Started
 
-1. **Launch the App**: Double-click the portable EXE; the app appears as a floating window
+1. **Launch the App**: Start the installed program after MSI installation; for manual portable use, double-click the EXE. The app appears as a floating window
 2. **System Tray**: Closing the window hides it while the app continues running from the tray
 3. **Show Window**: Use the global hotkey (configurable in settings) to quickly show/hide the window
 
