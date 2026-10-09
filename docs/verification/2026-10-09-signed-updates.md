@@ -72,7 +72,7 @@ Tauri signer 分别签 EXE/MSI；独立验证器引用客户端 `update_signatur
 
 ## 未完成的验收
 
-`gh release view` 只读核对当前公开 0.2.25 附件仍仅便携 EXE；[Latest 页面](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1) 未改动。本轮浏览工具访问元数据资产 URL 被工具限制，不能把该限制冒充客户端 HTTP 404 实测。当前没有公开 latest.json，首次公开签名更新仍须发更高基础版本。
+`gh release view` 只读核对当时公开的 0.2.25 附件仍仅便携 EXE；[Latest 页面](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1) 未改动。本轮浏览工具访问元数据资产 URL 被工具限制，不能把该限制冒充客户端 HTTP 404 实测。当时没有公开 latest.json，首次公开签名更新仍须发更高基础版本（该版本已于同日随 0.2.26 发出，见下节）。
 
 待补：匿名公开元数据/两包独立下载和客户端验签；两个实际版本的发现/自身版本比较；Tauri 桌面便签与设置失败/超时/排空/退出/新进程运行和快捷键联合验收；MSI 自定义目录安装、升级、卸载及 marker/数据保持。旧 markerless MSI 与 NSIS 手动过渡。本地协议、合成 UI 和签名构建通过不代替这些项，因此 TODO U-01 保持未勾选。受影响 Markdown 的 361 个本地链接检查通过，`git diff --check` 通过。本轮没有提交、推送、打标签或发布。
 
