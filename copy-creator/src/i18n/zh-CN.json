@@ -471,6 +471,15 @@
     "pasteApiBase": "粘贴 Base URL",
     "copyWithComment": "复制含注释",
     "markApiKey": "标记为 API Key",
+    "invalidRecordType": "只有文本和链接可以标记为 API Key",
+    "apiKeyTooLong": "API Key 不能超过 16 KiB",
+    "updateFailed": "记录更新失败，请重试",
+    "recordNotFound": "记录已不存在",
+    "collapseText": "收起长文本",
+    "expandText": "展开完整文本",
+    "loadingText": "加载",
+    "collapse": "收起",
+    "expand": "展开",
     "unmarkApiKey": "取消 API Key 标记",
     "paste": "粘贴",
     "scrollToTop": "回到顶部"
@@ -507,7 +516,9 @@
     "minimize": "最小化"
   },
   "radialMenu": {
-    "empty": "暂无内容"
+    "empty": "暂无内容",
+    "loading": "正在加载…",
+    "pasteFailed": "保存或粘贴失败，点击关闭后重试"
   },
   "notes": {
     "create": "新建随记",

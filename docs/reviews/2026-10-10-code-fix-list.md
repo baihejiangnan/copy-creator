@@ -1,5 +1,9 @@
 # Copy Creator 代码修复清单（2026-10-10，第五版）
 
+> **继续修复复核**：P1-1 已按用户方案 A 接入随记摘要/详情与主窗保存握手；P1-2 已补原生 text/link 和 16 KiB 原文校验。P2-16 的“每次显示累积监听”推断不成立，实际迟到注册泄漏已修。P3 本轮仅处理轮盘残留、剪贴板卡片文案/删除名称。前端 104、Rust 178 通过/5 忽略；12 类临时反向回退均变红并恢复。其余项未批量关闭，桌面待验收。证据见[继续修复验证](../verification/2026-10-10-radial-notes-and-key.md)，任务状态仅见 [TODO](../TODO.md)。
+
+> **接手复核（2026-10-10，基线 `0746faa`）**：第五版及以下统计保留为历史证据；相关源码已进入本地提交，不能继续据“未提交”推断当前状态。本轮修复了遗留分组代次补丁的 `NoteError`/`String` 编译错误，补齐 `back()` 对新导航代次的校验，以及 P2-19 的目标颜色元数据冲突检查。P1-7 的原竞态推断不成立：命令完整持有 producer 读许可，迁移先排空 producer，不能在校验与取锁之间切库；锁内复核与真实 epoch 回包作为一致性加固保留。P2-19 原文“覆盖颜色行”亦需纠正：同 ID 的普通 INSERT 会触发约束错误并事务回滚；真正缺口是未在准入阶段拒绝已有颜色元数据，不同 ID 时还会接受并合入非空目标。当前结果、复现与后续顺序见[接手复核记录](../verification/2026-10-10-agent-handoff.md)与 [TODO](../TODO.md)。
+
 > 本清单是一次**只读代码评审**的产出：逐条列出当前工作区（`HEAD 8fd2bd1`，含 52 个已修改文件与 20 个未跟踪条目）中已核实的缺陷、风险与清理项，并给出可直接定位的文件与行号。
 >
 > **第五版说明**：按用户指示「开始修吧」，本轮**实际落地了 P1-5 与 P1-6 三处代码修改**（§3 内均标为「已修复（2026-10-10）」），并新增 `copy-creator/tests/recordStateActions.test.ts`（3 例）。**两条修复都做了反向验证**（把实现改回缺陷写法必须让新测试变红），其中反向验证推翻并修正了本清单第四版对 P1-6 的问题描述——详见 P1-6 的「第四版描述修正」行。修复后：前端 **87 passed / 0 failed**、`tsc -b --force` exit 0、`eslint .` exit 0、`vite build` 成功 599ms、`scripts/qa-process-isolation.ps1` exit 0。**未提交、未推送、未打包、未发布。**
@@ -68,26 +72,24 @@
 
 ## 3. P1 — 功能失效与安全边界
 
-### P1-1 升级后轮盘「短语」分类将永久为空，新建随记不会出现在轮盘
+### P1-1 升级后轮盘「短语」为空 —— 已修复代码，桌面待验收
 
 | 项目 | 内容 |
 | --- | --- |
-| 位置 | 轮盘读取链路：`copy-creator/src/components/RadialMenu/index.tsx:7`（`import { usePhraseStore }`）、`:132`（`const { groups, loadPhrases }`）、`:149`（`loadPhrases(key)`）、`:243`（`init()`）、`:273`（`const { phrases, pastePhrase }`）、`:345-346`（订阅 `groups`/`phrases`）、`:273-277`（命中短语后 `await pastePhrase(phrase)`）；数据层 `copy-creator/src/stores/phraseStore.ts:77`（`get_phrase_groups`）、`:103`（`get_phrases`）、`:197`（`paste_text`）；**另需知悉**：`RadialMenu/index.tsx:286` 只把 `[unDown, unMove, unUp]` 存入 `unlisteners`，`:280` 的 `resetState()` 是状态重置而非退订，故轮盘每次重新显示都会再注册一批监听（详见 §4 P2-16） |
-| 数据链路 | 页面已切换为随记：`copy-creator/src/pages/PhrasePage/index.tsx:1` 全文仅 `export { default } from "./SuijiPage";`。schema 6 迁移把 `phrases` 全部提升为 `notes` 并删除原行：`copy-creator/src-tauri/src/note_backup.rs:226`（`SELECT ... FROM phrases ... LIMIT 100`）→ `:229` `apply` → `:230` `DELETE FROM phrases WHERE id=?1`，由 `copy-creator/src-tauri/src/db.rs:713` 触发。 |
-| 问题 | 轮盘只读 `phrases` 表（全文件对 `suiji`/`notes`/`list_suiji`/`useNoteStore` **零匹配**）。**需要修正第一版的表述**：并非「两张表都不再写入」——<br>• **`phrases` 确实不再有新数据写入**：`create_phrase`（`copy-creator/src-tauri/src/db.rs:1499`，INSERT 在 `:1513`）在 UI 层无调用者，`phraseStore` 的六个 CRUD（`copy-creator/src/stores/phraseStore.ts:113-195`）在 `src/` 无调用者，仅 `copy-creator/tests/phraseStorage.test.ts` 引用；<br>• **`phrase_groups` 仍在读写**：它是分组表的复用实现，`copy-creator/src-tauri/src/suiji.rs:23`（`groups()` 用 `FROM phrase_groups g LEFT JOIN note_group_colors c`）与 `:66`（建组 upsert）、`:74`（排序 UPDATE）、`:84`（删除）都在用它，`copy-creator/src-tauri/src/notes.rs:809` 也用 `EXISTS(SELECT 1 FROM phrase_groups WHERE id=?1)` 校验分组存在性。<br>• **第四版补充**：旧短语**写**命令同样仍在（`copy-creator/src-tauri/src/db.rs:1499`/`:1529`/`:1550`，前端可达点 `phraseStore.ts:154/:169/:184`），其中 `delete_phrase`（`:1550`，DELETE 在 `:1557`）最危险——它删掉 `phrases` 行，但迁移 `promote_phrases` 已把同一条内容提升为便签，于是「删掉的短语会以便签形式继续存在」，而再次编辑又会写回 `phrases`，形成两个数据源互相矛盾的观感。 |
-| 影响 | 升级用户打开轮盘：旧短语已迁走、`phrases` 为空 → 轮盘短语分类为空；此后无论新建多少随记，轮盘都不会显示（随记写入 `notes` + `note_organization`）。这是一条用户可见的功能回归（`docs/TODO.md` 未登记该差异）。 |
-| 建议修复 | 二选一并明确写进设计文档：1）轮盘改读随记数据（复用 `copy-creator/src/lib/useRecordGroups.ts` 取组、`list_suiji` 取条目、`copy-creator/src/lib/suiji.ts:10` 的 `pasteNote` 粘贴），**分组继续走 `phrase_groups` 即可，不必改表**；2）或明确「轮盘短语分类退役」，同步更新 `docs/specs/PRD.md`、`docs/specs/ARCHITECTURE.md`、`docs/features/notes-design.md` 与 `docs/TODO.md`，并处理 `phraseStore` 与 5 个死文件（见 §5.1）。 |
-| 验证方式 | 迁移一个含 `phrases` 的旧库，确认轮盘能列出提升后的记录；新建随记后确认轮盘可见（或按方案 2 确认界面不再提供该入口）。 |
+| 修复前问题 | schema 6 把 phrases 提升为 notes 并清空，轮盘仍经 phraseStore/get_phrases 读取，所以升级与新建随记不可见。phrase_groups 继续是 live 表，不能删。 |
+| 当前位置 | `copy-creator/src/components/RadialMenu/index.tsx:20`、`src/lib/radialNotes.ts:38`、`src/lib/radialNoteFlush.ts:8`、`src/App.tsx:114`（后三个路径亦位于内层 copy-creator/）。 |
+| 实际修复 | 方案 A：get_suiji_groups/list_suiji/get_note，全部/未分组/自建组，50 条分页、2000 摘要上限；轮盘保持只读，不引入独立编辑 coordinator。保存握手由主窗既有 saveBarrier 执行，匹配请求/代次、11 秒总上限，失败不粘贴；成功读最新全文，通过 invokeStorage 原生粘贴。记录/存储变化拒绝旧响应，按当前分类分派并阻止重复在途手势。 |
+| 验证 | 真实内存库旧短语提升→分组/未分组查询；真实 TSX 的 VM 接线、保存顺序/错误、分页上限、代次、文件引用及监听清理。旧数据源和整份旧组件回退均变红，保存/回执/在途守卫分别反向验证。轮盘静态 JS 闭包仅增 3258 B（0.98%）。完整证据与桌面缺口见[本轮记录](../verification/2026-10-10-radial-notes-and-key.md)。 |
+| 边界 | phraseStore 的兼容测试与旧命令/死文件暂保留，不再用于轮盘。原文关联的“每次显示重复注册”推断不成立，见 P2-16 的纠正。 |
 
-### P1-2 `set_user_api_key` 缺原生类型与长度校验
+### P1-2 `set_user_api_key` 缺原生类型与长度校验 —— 已修复
 
 | 项目 | 内容 |
 | --- | --- |
-| 位置 | `copy-creator/src-tauri/src/db.rs:2400-2417`（命令定义 `:2400`）；关键行 `:2403` `try_producer`、`:2404` epoch 校验、`:2407` `SELECT content FROM clipboard_records WHERE id = ?1`、`:2408-2410` `if value && !crate::secrets::is_protected(&content) { crate::secrets::protect(&content)? }`、`:2412` `UPDATE clipboard_records SET user_api_key = ?1, content = ?2 WHERE id = ?3` |
-| 前端调用 | `copy-creator/src/pages/ClipboardPage/ClipboardCard.tsx:206`（`handleToggleUserApiKey`） |
-| 问题 | 命令不检查 `type`，也不限制长度。**触发范围需按实际界面收敛**：正常界面目前只对文本记录提供标记入口（`ClipboardCard.tsx` 的菜单项按类型渲染），所以「用户随手就能加密图片/文件路径」并不成立；但命令层本身对 `image`/`file` 记录并不拒绝，一旦由其他入口（未来新增 UI、脚本、IPC 直调）传入，就会把该记录的 `content`（图片/文件的**相对路径**）用 DPAPI 保护后写回，使记录内容损坏。 |
-| 建议修复 | 在命令内限定 `type IN ('text','link')`；长度上限**按实际支持的密钥长度确定**，不宜直接套用 `is_api_key` 的 200 字节（该阈值是自动识别的启发式，不是产品约束）；非法时返回明确错误码（如 `notes.invalidRecordType`）。 |
-| 验证方式 | 新增 Rust 单测：对 `type='image'` 调用应返回错误且 `content` 不变；超长文本行为按确定的阈值断言。前端对不可用类型隐藏菜单项。 |
+| 位置 | `copy-creator/src-tauri/src/db.rs:2400` 命令，`:2413` 校验 helper；前端 `copy-creator/src/pages/ClipboardPage/ClipboardCard.tsx:209` 显示失败。 |
+| 修复前问题 | 正常界面只给 text 入口，但原生命令可把 image/file/explorer 的路径加密后写回，且没有手动标记长度预算。 |
+| 实际修复 | 限 text/link，16 KiB UTF-8 原文；显式 invalidRecordType/apiKeyTooLong/recordNotFound/updateFailed 错误码。先限制受保护密文规模，再 reveal 校验原文；重复保护与旧超长文本取消标记保持。没有套用 is_api_key 的 200 字节启发式，没有降低 DPAPI 保护。 |
+| 验证 | 3 项 Rust 测试覆盖非法类型不变、长文本/link/密文重试、ASCII/多字节超长拒绝及允许取消；回退类型/长度判断后 2 项失败、1 项通过。前端实际 handler 测试覆盖原生错误可见与异常细节隐藏。真实菜单与桌面验收另补。 |
 
 ### P1-4 翻译错误信息使用字节切片，响应含中文时 panic —— **已修复（2026-10-10）**
 
@@ -129,14 +131,14 @@
 | **修复验证（含反向验证）** | ① 正常跑：**87 passed / 0 failed**；`tsc -b --force` exit 0；`eslint .` exit 0；`vite build` 成功 599ms；`scripts/qa-process-isolation.ps1` exit 0（`ownedQaNativeProcesses: 0`）。<br>② **反向验证 a**：把 `suiji.ts` 的恢复行改回 `coordinator.setActive(activeId);` → 测试①**变红**（`a selection made during the write must not be clobbered by the pointer captured before it`），②③仍绿；已还原。<br>③ **反向验证 b**：把 `notesWorkspace.back()` 还原成 HEAD 原实现（`void coordinator.flush(...)` + 立即拆除）→ 测试③**变红**（`back() must not tear down before the flush settles`），①②仍绿；已还原。<br>④ 第一次反向验证（对中途那个**等价**写法）**仍然全绿**，由此发现假修复——这也是本清单记录该教训的原因：**未做反向验证的绿灯测试不可信**。 |
 | 验证方式（待补） | 手工验证改分组后立刻返回，重开后分组仍在；尚未做真实桌面交互验收（未跑 `tauri dev`）。 |
 
-### P1-7 `get_suiji_groups` 回显请求里的 epoch，换库竞态下会把旧库数据当成新一代
+### P1-7 `get_suiji_groups` 回显请求里的 epoch —— 接手复核降级为一致性加固
 
 | 项目 | 内容 |
 | --- | --- |
 | 位置 | `copy-creator/src-tauri/src/suiji.rs:45-54`：`:48` `try_producer`、`:49` `crate::db::require_storage_epoch(&app, Some(expected_storage_epoch))?`、`:50` `let state = app.state::<crate::db::DbState>(); let conn = state.conn.lock().map_err(|_| "notes.databaseFailed")?;`、**`:53` `Ok(crate::notes::StorageResult { storage_epoch: expected_storage_epoch, value: rows })`** |
-| 问题 | 返回值里的 `storage_epoch` 直接用**请求参数**，而不是加锁后重新读取的实际代次。`:49`（校验）与 `:50`（加锁）之间若发生换库（`migrate_storage` 会在持锁后 `fetch_add` 并经 `storage_events` 广播），客户端会把「旧库读出的行」配上「新代次号」接受下来，破坏 `storageIdentity` 的前后校验语义（`copy-creator/src/lib/storageIdentity.ts` 的 epoch 校验与 `useRecordGroups.ts:18-27` 的 `onStorageIdentity` 都以此为准）。 |
+| 接手复核 | 原返回值确实回显请求参数，但完整命令持有 producer 读许可；迁移必须先排空该许可，不能在校验与取锁间切库。原先所述可触发换库竞态不成立。保留工作区的锁内复核和真实 epoch 回包，作为与 notes 命令一致的加固，并修复其 `NoteError` 到字符串错误码的适配；不作为已复现的数据串库缺陷。 |
 | 正确范式（同仓已有） | `copy-creator/src-tauri/src/notes.rs:703-709` `fn check_epoch(state: &DbState, expected_epoch: u64) -> Result<u64>`（`:704` 读 `state.storage_epoch.load(Ordering::Relaxed)`、`:705-707` 不等即 `Err(error("notes.storageChanged"))`），使用点在 `notes.rs:752` 取锁之后、`:754` `let epoch = check_epoch(&state, expected_epoch)?;`、`:764` 返回真实 `epoch`。 |
-| 影响 | 换库瞬间的竞态窗口，用户可见表现为分组列表短暂显示旧库分组。与 P2-5（`require_storage_epoch` 的 `None` 语义）同族，但这条是**已实现校验却回显了错误值**，修法只需照抄 `notes.rs` 的写法。 |
+| 验证边界 | 接手时补丁有两处 E0277 编译错误，修正后 Rust 全量 174 通过/5 忽略。未复现原文声称的分组串库，未做分组 IPC 换库桌面验收；不能用“照抄校验函数”替代返回错误类型与 lifecycle 许可审查。 |
 | 建议修复 | 把 `suiji.rs:49` 的 `require_storage_epoch` 校验移到 `:50` 加锁之后，或改为调用 `notes::check_epoch` 并把返回的真实 epoch 放进 `StorageResult`；同时为 `get_phrase_groups`/`get_phrases`（`db.rs:1387`、`db.rs:1472`，二者连 epoch 参数都没有）补上同样的合同。 |
 | 验证方式 | 新增 Rust 单测：构造「校验通过后、加锁前换库」的等价场景（或直接断言返回值等于加锁后读取的 epoch）。 |
 
@@ -163,10 +165,10 @@
 | P2-13 | 全仓 Rust | `#[tauri::command]` 共 **104** 个，按属性行 + 签名行重新普查为 **68 同步 + 31 `async fn` + 5 `#[tauri::command(async)]`**（异步属性 5 个均在 `copy-creator/src-tauri/src/db.rs`：`:1007`、`:1311`、`:1723`、`:1748`、`:1961`）；`db.rs` 内 `conn.lock()` 出现 54 次；注册表 `copy-creator/src-tauri/src/lib.rs:373-478` 共 104 条，**双向差集为空**（`shortcut::save_note_shortcut` 已在 `lib.rs:441` 注册，§6.4 有专条） | **修正第一版的统计错误**（原写「99 个同步」，是当时按属性行与 `fn` 关键字粗判、未区分 `pub async fn` 所致）。仍有具体重操作需检查，但**不能据错误的统计做批量改造**。正确示例见 `copy-creator/src-tauri/src/db.rs:1913` `change_storage_directory` 用 `tauri::async_runtime::spawn_blocking`（`:1915`）。 |
 | P2-14 | 全仓 Rust | **109** 处 `let _ = ...`（`paste.rs` 22、`db.rs` 17、`shortcut.rs` 14、`single_instance.rs` 11、`lifecycle.rs` 10、`update_package.rs` 7、`lib.rs` 6、`backup.rs` 5、`clipboard_wake.rs` 5、`clipboard.rs` 4、`db_metrics.rs` 2、`notes.rs` 2、`updates.rs` 2、`tray.rs` 1、`vault.rs` 1） | 含 `db.rs:963` 丢弃 `clipboard-deleted` 发射失败、`db.rs:990` 静默删除临时粘贴图片、`db.rs:997` `refresh_tray_menu(app).ok()`、`lib.rs:307` `let _ = autostart.enable()`。**存在 `let _ =` 本身不证明运行缺陷**，按具体后果处理：对关键发射/持久化加 `log::warn!` 即可，其余可保留。 |
 | P2-15 | `copy-creator/src-tauri/src/db.rs:43-53`、`:12-22`、`:55-75`（`category_sql`，`apikey` 分支 `:69-72`） | 三处各自维护前缀清单与保护前缀（`dpapi:v1:%`、`sk-`、`AIza`、`glpat-`、`ghp-`、`xai-`） | 清单漂移风险。建议抽常量集中维护。 |
-| P2-16 | `copy-creator/src/components/RadialMenu/index.tsx:243`（`init()` 调用点）、`:286`（`unlisteners = [unDown, unMove, unUp];`）、`:246-287`（`setup()` 内三次 `await listen(...)`）、`:280`（`resetState()` 在 `radial-menu-up` 分支内） | `setup()` 定义在 `useEffect` 内并在 `:289` 自调用；它每次执行都会 `await listen("radial-menu-down"/"radial-menu-move"/"radial-menu-up")`，但退订数组只在 `:286` 赋值，**而 `resetState()`（`:280`）只重置显示状态、不做任何 `unlisten`** | 第四版新发现。轮盘是长期驻留的隐藏 WebView，反复触发事件后监听器累积；`unlisteners` 被下次 `setup()` 覆盖，之前的一批彻底失去句柄（比 §4 P2-1 的剪贴板监听问题更彻底）。建议把 `setup()` 的三次订阅改为只注册一次（组件挂载级），`resetState()` 保持纯状态重置。**未做运行时验证**（未真实驱动轮盘），故只列为 P2。 |
+| P2-16 | `copy-creator/src/components/RadialMenu/index.tsx:225`、`copy-creator/src/lib/eventSubscriptions.ts:2` | **原“每次显示重复注册”推断不成立**：原 effect 的两个 callback 依赖稳定，setup 只在挂载时执行。真实缺口为 cleanup 后才解析的 listen 句柄无法释放 | **已修真实清理缺口**：helper 为迟到句柄立即退订；反复显示不累积、卸载全退订由真实 TSX 的 VM 接线验证，去掉立即释放的反向回退使测试变红。真实 WebView/StrictMode 桌面另验。 |
 | P2-17 | `copy-creator/src/stores/notesWorkspace.ts:46-53`（`back()`） | `:48` `if (coordinator && selectedId) void coordinator.flush(selectedId).catch(() => {});` —— **`flush` 是异步的（`copy-creator/src/lib/noteCoordinator.ts:227`）却没有 `await`**；紧接着 `:50-51` 用 `coordinator?.getSession(selectedId)` 的**当前** `session.status` 计算 `const completed = !session \|\| session.status === "saved" \|\| session.status === "empty";`，`:52` 据此决定是否清除 `quickId` | `status` 要等 flush 的 IPC 落地才会变成 `"saved"`，因此「刚编辑完立刻返回」会被判为未完成 → `quickId` 保留；而 `create()`（`notesWorkspace.ts:43`）在 `quickId` 仍指向存在会话时会**复用它**，于是下次新建草稿会接续上一段内容。反向顺序下（`status === "empty"` 时 `:49` 的 `discard` 也是 `void` 未等待）可能把「已写入但状态未刷新」的会话丢弃。属随记可靠性问题，与前端的保存屏障语义强耦合。 |
 | P2-18 | `copy-creator/src/pages/NotesPage/index.tsx:75`（`const { groups } = useRecordGroups();`，位于具名导出 `NoteEditor` 内）对照 `copy-creator/src/pages/PhrasePage/SuijiPage.tsx:29`（`const { groups, ready, refresh } = useRecordGroups();`） | `useRecordGroups`（`copy-creator/src/lib/useRecordGroups.ts:10-32`）每次调用都会新建 `LatestQuery`、发一次 `get_suiji_groups`（`:20` `invoke("get_suiji_groups", { expectedStorageEpoch: epoch })`）并注册 3 个 `listen`（`:28-30`）。`NoteEditor` 由 `SuijiPage.tsx:84` 渲染，而 `SuijiPage` 自身已订阅，故**同一条分组数据被订阅两遍** | 每次 `NoteEditor` 挂载/卸载都多一组 IPC 与监听（与 P2-16 同属「监听生命周期」族）。`NoteEditor` 的 props（`NotesPage/index.tsx:68`）里没有 `groups`，所以目前无法直接复用父级数据。建议把 `groups` 作为可选 prop 传入，或把订阅提升到 `useRecordGroups` 的内部缓存（模块级单例）。 |
-| P2-19 | `copy-creator/src-tauri/src/storage.rs:154-158`（空库闸门）对照 `:183`（`copy_rows(..., "note_group_colors", ...)`） | 换库前的冲突判定只查两处：`:155` `SELECT EXISTS(SELECT 1 FROM notes)`、`:157` `SELECT EXISTS(SELECT 1 FROM phrase_groups)`；`:158` `if has_notes \|\| has_groups { return Err("notes.storageConflict".into()); }`。但复制阶段 `:182-184` 会写入 `phrase_groups`、**`note_group_colors`** 与 `note_organization` | 一个**只含 `note_group_colors` 行**的目标库（例如上一次换库中途失败、或手工构造）能通过闸门，随后 `:183` 会覆盖其颜色行，而 `:165` 的回滚 DELETE 列表已包含 `note_group_colors`——即「闸门判定」与「复制 + 回滚」三处的表集合不一致。建议抽一个共享的表清单常量，闸门按同一集合判定。 |
+| P2-19 | `copy-creator/src-tauri/src/storage.rs` 的 `prepare_target` 空库准入 | 原先只检查 notes 与 phrase_groups，未检查 note_group_colors。只含颜色元数据的目标会通过准入；同 ID 的普通 INSERT 会约束失败并事务回滚，不同 ID 则会接受并合入该目标，原文“直接覆盖颜色”推断有误 | **已修复（接手，2026-10-10）**：增加颜色元数据准入检查，提前返回 `notes.storageConflict`。新增内存库测试覆盖同 ID/不同 ID，拒绝后完整目标 digest、分组及颜色行保持；有效暂存凭据重试合同不变。 |
 | P2-20 | `copy-creator/src-tauri/src/shortcut.rs:64`（`NOTE_SHORTCUT_ID.store(new_shortcut.parse::<Shortcut>().map(\|key\| key.id()).unwrap_or(0), Ordering::SeqCst)`）对照 `:27`（`if NOTE_SHORTCUT_ID.load(Ordering::SeqCst) == shortcut.id()`） | 解析失败时把便签快捷键 ID 存成 **0 哨兵**，而 `0` 是合法 ID：`global-hotkey-0.7.0` 的 `hotkey.rs:97` 用 `id: (mods.bits() << 16) \| key as u32`，且 `parse_hotkey` 支持单键热键（`mods` 为空）；`keyboard-types-0.7.0` 的 `Code` 首变体 `Backquote` = 0 | 第四版新发现，**当前不可达**：`copy-creator/src/components/SettingsContent.tsx:67` 的录制逻辑要求至少一个修饰键（无修饰键直接 return），正常 UI 无法产生「单键 Backquote」。属潜在（若将来支持单键热键或经配置直写该值）。建议改用 `Option<u32>`/`u32::MAX` 之类不会与合法 ID 冲突的表示。另：`copy-creator/src-tauri/src/db.rs:1398` 用 `row.get::<_, i32>(2)` 读 `sort_order`，而 `copy-creator/src-tauri/src/suiji.rs:16` 的 `NoteGroup.sort_order` 是 `i64`——同一字段两个宽度，属同类一致性问题（一并登记于此）。 |
 
 ---
@@ -186,16 +188,16 @@
 | `copy-creator/src/types/index.ts:43` | `TranslationRecord` 全仓唯一命中 |
 | `copy-creator/src/components/Icons.tsx:21`、`:90`、`:146` | `logo`/`search`/`empty` 三个图标无引用（`notes` 图标 `:2` 仍被 `copy-creator/src/pages/PhrasePage/RecordMenu.tsx:53,65` 使用） |
 | `copy-creator/src/App.tsx:28-34` | `PANEL_MAP` 的 `notes` 键（`:30`）不可达：`NAV_ITEMS`（`:36-41`）无该键，`setActivePanel` 全部调用点（`:101`、`:122`、`:161`、`:289`、`:347`）不传 `notes` |
-| `copy-creator/src/components/RadialMenu/index.tsx:75`、`:317` | `lastFocusRef` 只写不读 |
-| `copy-creator/src/components/RadialMenu/index.tsx:393` | `` `radial-menu-overlay${visible ? "" : " radial-menu-hidden"}` `` 位于 `:391` `if (!visible) return null;` 之后，三元恒为空串，`radial-menu-hidden` 永不生效（样式见 `copy-creator/src/styles/radial-menu.css:8,12`） |
-| `copy-creator/src/components/RadialMenu/index.tsx:234`、`:264` | 两处 `console.log` 调试残留（发布构建会保留） |
+| `copy-creator/src/components/RadialMenu/index.tsx:75`、`:317` | **本轮已移除**。原 `lastFocusRef` 只写不读 |
+| `copy-creator/src/components/RadialMenu/index.tsx:393` | **本轮已移除恒空分支**。原 `` `radial-menu-overlay${visible ? "" : " radial-menu-hidden"}` `` 位于 `:391` `if (!visible) return null;` 之后，三元恒为空串，`radial-menu-hidden` 永不生效（样式见 `copy-creator/src/styles/radial-menu.css:8,12`） |
+| `copy-creator/src/components/RadialMenu/index.tsx:234`、`:264` | **本轮已移除**。原两处 `console.log` 调试残留（发布构建会保留） |
 
 ### 5.2 文案与 i18n（`AGENTS.md` 要求中英文案同步）
 
 | 位置 | 硬编码文案 |
 | --- | --- |
 | `copy-creator/src/pages/ClipboardPage/index.tsx:259` | 「显示更多」 |
-| `copy-creator/src/pages/ClipboardPage/ClipboardCard.tsx:389`、`:392` | 「收起长文本」/「展开完整文本」/「加载」/「收起」/「展开」（该文件 `:309`、`:365`、`:379` 已有 `t()` 用法可对照） |
+| `copy-creator/src/pages/ClipboardPage/ClipboardCard.tsx:389`、`:392` | **本轮已修，反向验证通过**。原文案：「收起长文本」/「展开完整文本」/「加载」/「收起」/「展开」（该文件 `:309`、`:365`、`:379` 已有 `t()` 用法可对照） |
 | `copy-creator/src/components/ApiKeyToast.tsx:60`、`:62`、`:63` | 「检测到 API Key」/「可能是 …」/「可右键标注来源」（文件内无 `useTranslation`） |
 | `copy-creator/src/pages/PhrasePage/PhraseList.tsx:54`、`:62` | 「选择一个场景组查看短语」/「当前分组中无快捷短语」（文件本身已是死代码，随 §5.1 一并处理） |
 
@@ -205,7 +207,7 @@
 | --- | --- |
 | `copy-creator/src/components/IosSelect.tsx:54-67` | 触发按钮（`<button type="button" onClick=...>`）无 `aria-haspopup`/`aria-expanded`/`role`/`tabIndex`/`onKeyDown`（全文件对 `aria-`/`role=`/`onKeyDown`/`tabIndex` 零匹配）。**澄清**：它是原生 `<button>`，因此已有**基本** Tab 聚焦与 Enter/Space 激活；缺的是**完整选择器**的键盘交互（上下箭头/Escape）与 ARIA 状态。可参照新组件 `copy-creator/src/components/SelectMenu.tsx:76-101`（`aria-haspopup="menu"`/`aria-expanded`/`aria-controls`/`role="menu"`/`role="menuitemradio"`/`aria-checked`，以及 Arrow/Home/End/Escape/Tab 处理）或 `copy-creator/src/components/IosMultiSelect.tsx:26-36`（Escape 监听）与 `:49-51`（`aria-label`/`aria-expanded`/`aria-controls`） |
 | `copy-creator/src/pages/ClipboardPage/index.tsx:198-207` | 分类 chip 无 `aria-pressed`（该文件 `:270` 有 `aria-label` 可对照） |
-| `copy-creator/src/pages/ClipboardPage/ClipboardCard.tsx:395-397` | 删除按钮无 `aria-label`/`title`（相邻 `:379`、`:388-389` 均有）。**第三版误写为 `copy-creator/src/components/ClipboardCard.tsx`（该路径不存在），第四版已改正为 `pages/ClipboardPage/`** |
+| `copy-creator/src/pages/ClipboardPage/ClipboardCard.tsx:395-397` | **本轮已修**：增加 `aria-label={t("common.delete")}`，反向验证通过。原问题：删除按钮无 `aria-label`/`title`（相邻 `:379`、`:388-389` 均有）。**第三版误写为 `copy-creator/src/components/ClipboardCard.tsx`（该路径不存在），第四版已改正为 `pages/ClipboardPage/`** |
 | `copy-creator/src/pages/TranslationPage.tsx:91` | 错误图标复用垃圾桶图标 `Icons.delete`（`copy-creator/src/components/Icons.tsx:96`） |
 | `copy-creator/src/components/settings/ShortcutSection.tsx:79` | 使用 `className="notes-hint"`，但该文件（`:1-4`）**不导入任何 CSS**；`.notes-hint` 只定义在 `copy-creator/src/styles/notes.css:13`/`:15`（`styles/settings.css` 零匹配），而 `notes.css` 的唯一导入者是 `copy-creator/src/pages/NotesPage/index.tsx:10`。第四版核对构建产物确认：`dist/assets/PhrasePage-*.css`（24032 B）内含 `notes-hint`，即当前提示样式**只是碰巧**随懒加载 chunk 一并生效；一旦 `NotesPage` 的 CSS 不再被打进同一 chunk，提示就会失去样式。建议把该提示样式移到 `settings.css`（或在 `ShortcutSection.tsx` 内显式导入）。 |
 
@@ -307,7 +309,7 @@ Rust 侧薄弱：`clipboard_wake.rs`、`note_files.rs`、`update_signature.rs`�
 - **P1-6 / P2-17（随记状态机）**：~~未覆盖~~ **已由 `copy-creator/tests/recordStateActions.test.ts` 覆盖 3 例**（`organizeNote` 的并发改选、`organizeNote` 的自身恢复、`back()` 的 flush 顺序），且两处均通过反向验证。仍缺：`changeNoteState` 与 `captureNote` 路径的顺序覆盖。
 - **P1-7（epoch 回显）**：`copy-creator/src-tauri/src/suiji.rs` 的 `mod tests`（`:88-101`）只有 1 例，未覆盖 `get_suiji_groups` 的返回值。
 - **P2-18（重复订阅）**：`copy-creator/src/lib/useRecordGroups.ts` 无测试。
-- **P2-19（换库闸门）**：`copy-creator/src-tauri/src/storage.rs` 现有 5 例测试，未覆盖「只含 `note_group_colors` 的目标库」这一分支。
+- **P2-19（换库闸门）**：接手已新增「只含 `note_group_colors` 的目标库」测试，覆盖同 ID 与不同 ID 两种情况；本模块共 6 例。真实目录切换桌面联合验收仍待补齐。
 - **新增测试的驱动方式**：`recordStateActions.test.ts` 用 VM 加载真实源码，因此**依赖 `src/lib/suiji.ts` 与 `src/stores/notesWorkspace.ts` 的相对导入说明符**（stub 按 `./notes`/`../lib/notes` 等字面匹配）。若将来引入新的协作者模块，需在 `loadModules` 的 `require` 里补分支，否则会以 `Unexpected dependency <name>` 失败。
 
 ---
@@ -327,9 +329,9 @@ Rust 侧薄弱：`clipboard_wake.rs`、`note_files.rs`、`update_signature.rs`�
 按用户给出的方向整理（**第 1、3 项已完成**）：
 
 1. ~~**两类 UTF-8 panic 一起修**：**P0-1**（`make_key_preview` 字符安全切分 + `is_api_key` ASCII 限定，**两条触发路径都要覆盖**）与 **P1-4**（三处翻译截断抽公共 `truncate_chars`）。改动小、风险低，补齐 Unicode 边界单测后再继续。~~ **已完成（2026-10-10）**：`make_key_preview` 改为字符安全切分（一次覆盖全部 5 个调用点）；`translator.rs` 新增 `truncate_chars` 并替换三处。**`is_api_key` 的 ASCII 限定按用户决定未做**——它是独立的行为变更，且对修 panic 无贡献。新增 7 例测试（`db.rs` 3 + `translator.rs` 4），Rust 由 166 增至 **173 passed**；两处都做了「改回旧实现即失败」的反向验证。
-2. **修轮盘随记回归**：**P1-1**。先定方向——轮盘接入随记数据（分组仍走 `phrase_groups`，不必改表），或正式退役短语分类并同步 PRD/ARCHITECTURE/notes-design/TODO。方向定了再动代码与文档。
+2. **P1-1 方案 A 已实现并通过反向回归**；真实桌面保存/粘贴与迁移联合验收继续，见 TODO。
 3. ~~**修随记状态机的两个真实回归**：**P1-5**（`open-note` 用 `workspace.open(id, epoch)` 取代 `back()`+`setQuery`，改动只有几行，`notesWorkspace.ts:34-41` 的实现已就绪）与 **P1-6**（`organizeNote` 的 activeId 恢复条件 + `back()` 的 `flush` 未 await）。~~ **已完成（2026-10-10）**：`App.tsx` 的 `open-note` 改调 `open(id)`；`suiji.ts` 的恢复行改为 `if (activeId === id && coordinator.activeNoteId === null) coordinator.setActive(id);`；`notesWorkspace.back()` 改为 flush 落地后按并发守卫拆除。新增 `tests/recordStateActions.test.ts`（3 例），前端由 84 增至 **87 passed**；两处修复均通过反向验证。**遗留**：`back()` 行为变为异步生效，调用方若依赖「立即清空」需 `await` 一个 tick。
-4. **补原生类型与存储身份校验**：**P1-2**（`set_user_api_key` 限定 `type` 并按实际密钥长度设上限）、**P1-7**（`get_suiji_groups` 改为返回加锁后读到的真实 epoch，照抄 `notes.rs:703-709`）、**P2-5**（收紧 `require_storage_epoch` 写命令合同，同时审查兼容调用点）。P1-3 作为同族的加固项一并考虑即可，不必单独立项。
-5. **监听、缓存与清理项**：**P2-1**、**P2-3**、**P2-11**、**P2-14**、**P2-15**、**P2-16**（轮盘监听重复注册）、**P2-18**（重复订阅 `useRecordGroups`）、**P2-19**（换库闸门表集合不一致）、**P2-20**（快捷键 0 哨兵），以及 §5 的 P3 项。
+4. **P1-2 已补原生类型/16 KiB 上限；P1-7 已按接手结论降为一致性加固**。P2-5 兼容调用点与必填 epoch 合同继续逐项审查，不批量收紧。
+5. **监听、缓存与清理项**按 TODO 继续；P2-16 已纠错并修复迟到注册、P2-19 已修，其他 P2/P3 未因本轮回归自动关闭。
 6. **单独设计，不要为消除清单条目而动**：**P2-6**（迁移长锁，先测量，须保持快照一致/连接身份/失败回滚）、**P2-7**（去重解密开销，先测量候选规模）、**P2-8**（图片读取保护不对称，单独分析）、**P2-17**（`back()` 的 flush 顺序**主体已在 P1-6 中修掉**，剩余是 `changeNoteState` 路径的同类顺序问题，须与保存屏障一起回归）、**P2-12**（毒化恢复须按状态一致性分类处理）。用户明确要求：**避免为消除清单条目而破坏保存合同**。
 7. **文档同步**：修复后更新 `docs/TODO.md`（含陈旧的「当前接手顺序」段，`:211`/`:219` 仍写 schema 5 与旧测试数）、受影响的功能设计与 `AGENTS.md` 入口。**第五版已同步**：本清单升为第五版、`docs/TODO.md` 增补条目、新建 `docs/verification/2026-10-10-note-state-regressions.md`。

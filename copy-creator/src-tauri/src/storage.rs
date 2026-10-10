@@ -155,7 +155,8 @@ pub(crate) fn prepare_target(
             .query_row("SELECT EXISTS(SELECT 1 FROM notes)", [], |r| r.get(0))
             .map_err(db_error)?;
         let has_groups: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM phrase_groups)", [], |r|r.get(0)).map_err(db_error)?;
-        if has_notes || has_groups {
+        let has_group_colors: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM note_group_colors)", [], |r|r.get(0)).map_err(db_error)?;
+        if has_notes || has_groups || has_group_colors {
             return Err("notes.storageConflict".into());
         }
         crate::vault::ensure_empty_storage(&tx)?;
@@ -302,6 +303,28 @@ mod tests {
             "notes.storageConflict"
         );
         assert_eq!(digest(&target).unwrap(), before);
+    }
+    #[test]
+    fn target_with_only_group_colors_is_rejected_without_changes() {
+        for same_id in [false, true] {
+            let source = connection();
+            let mut target = connection();
+            let group = uuid::Uuid::new_v4().to_string();
+            crate::suiji::restore_groups(&source, &[crate::suiji::NoteGroup {
+                id: group.clone(), name: "source group".into(), color: "#aabbcc".into(),
+                sort_order: 0, count: 0,
+            }]).unwrap();
+            let target_group = if same_id { group } else { uuid::Uuid::new_v4().to_string() };
+            target.execute("INSERT INTO note_group_colors VALUES(?1,'#112233')", [&target_group]).unwrap();
+            let before = digest(&target).unwrap();
+            assert_eq!(
+                prepare_target(&source, &mut target, "source", "target", RETENTION_MS).unwrap_err(),
+                "notes.storageConflict"
+            );
+            assert_eq!(digest(&target).unwrap(), before);
+            assert_eq!(count(&target, "phrase_groups"), 0);
+            assert_eq!(count(&target, "note_group_colors"), 1);
+        }
     }
     #[test]
     fn failed_source_routing_can_retry_even_after_source_edits_without_losing_original_target_settings(

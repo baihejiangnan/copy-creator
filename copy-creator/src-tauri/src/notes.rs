@@ -700,7 +700,7 @@ pub(crate) fn prune_expired(app: &AppHandle) -> std::result::Result<bool, ()> {
     }
 }
 
-fn check_epoch(state: &DbState, expected_epoch: u64) -> Result<u64> {
+pub(crate) fn check_epoch(state: &DbState, expected_epoch: u64) -> Result<u64> {
     let epoch = state.storage_epoch.load(Ordering::Relaxed);
     if epoch != expected_epoch {
         return Err(error("notes.storageChanged"));
@@ -934,6 +934,25 @@ mod tests {
             target: "https://example.com/a".into(),
             display_name: "Reference".into(),
         }
+    }
+    #[test]
+    fn radial_suiji_queries_include_promoted_phrases_and_new_ungrouped_notes() {
+        let mut conn = db();
+        let group = id();
+        let legacy = id();
+        conn.execute("INSERT INTO phrase_groups VALUES(?1,'legacy',0,'now','now')", [&group]).unwrap();
+        conn.execute("INSERT INTO phrases VALUES(?1,?2,'old','  original\r\n  ',0,'2026-01-01','2026-01-02')", params![legacy, group]).unwrap();
+        crate::note_backup::promote_phrases(&conn).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM phrases", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(crate::suiji::groups(&conn).unwrap()[0].count, 1);
+        let grouped = read_sorted_page(&conn, NoteFilter::Active, "", None, 50, Some(group), Some(NoteSort::Updated)).unwrap();
+        assert_eq!(grouped.records.len(), 1);
+        assert_eq!(read_note(&conn, &grouped.records[0].id).unwrap().body, "  original\r\n  ");
+        let fresh = create(&mut conn, &draft("new full body")).note.summary.id;
+        let ungrouped = read_sorted_page(&conn, NoteFilter::Ungrouped, "", None, 50, None, Some(NoteSort::Updated)).unwrap();
+        assert_eq!(ungrouped.records.len(), 1);
+        assert_eq!(ungrouped.records[0].id, fresh);
+        assert_eq!(read_note(&conn, &fresh).unwrap().body, "new full body");
     }
     #[test]
     fn selected_sort_pages_all_scopes_without_skips_or_duplicates() {

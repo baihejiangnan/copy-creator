@@ -205,8 +205,8 @@ function ClipboardCardInner({
       try {
         await invokeStorage("set_user_api_key", { id: record.id, value: newValue });
         await loadRecords();
-      } catch {
-        // ignore
+      } catch (error) {
+        setCaptureError(typeof error === "string" && error.startsWith("clipboard.") ? error : "clipboard.updateFailed");
       }
     },
     [record.id, record.user_api_key, loadRecords],
@@ -386,13 +386,13 @@ function ClipboardCardInner({
                 onClick={handleToggleText}
                 type="button"
                 aria-expanded={isTextExpanded}
-                aria-label={isTextExpanded ? "收起长文本" : "展开完整文本"}
+                aria-label={t(isTextExpanded ? "clipboard.collapseText" : "clipboard.expandText")}
                 disabled={loadingFullContent}
               >
-                <span>{loadingFullContent ? "加载" : isTextExpanded ? "收起" : "展开"}</span>
+                <span>{t(loadingFullContent ? "clipboard.loadingText" : isTextExpanded ? "clipboard.collapse" : "clipboard.expand")}</span>
               </button>
             )}
-            <button className="card-delete-btn" onClick={handleDelete}>
+            <button className="card-delete-btn" onClick={handleDelete} aria-label={t("common.delete")}>
               {Icons.delete}
             </button>
           </div>

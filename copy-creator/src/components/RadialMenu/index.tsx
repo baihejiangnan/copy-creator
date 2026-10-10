@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { useClipboardStore, type ClipType } from "../../stores/clipboardStore";
-import { usePhraseStore } from "../../stores/phraseStore";
+import { getStorageIdentity, isCurrentStorageIdentity, invokeStorage, onStorageIdentity } from "../../lib/storageIdentity";
+import { RadialNotes, RADIAL_ALL, RADIAL_UNGROUPED } from "../../lib/radialNotes";
+import { requestRadialFlush, type RadialFlushReply } from "../../lib/radialNoteFlush";
+import { ownEventSubscriptions } from "../../lib/eventSubscriptions";
 import { useHoverSwitch } from "./useHoverSwitch";
 import { HoverProgress } from "./HoverProgress";
 import i18n from "../../i18n";
@@ -14,8 +17,13 @@ type TabKey = "clipboard" | "phrases";
 const HOVER_DELAY = 500;
 const MAX_ITEMS = 2000;
 const EMPTY_RECORDS: ReturnType<typeof useClipboardStore.getState>["records"] = [];
-const EMPTY_GROUPS: ReturnType<typeof usePhraseStore.getState>["groups"] = [];
-const EMPTY_PHRASES: ReturnType<typeof usePhraseStore.getState>["phrases"] = [];
+const radialNotes = new RadialNotes({
+  epoch: getStorageIdentity, current: isCurrentStorageIdentity, invoke, paste: invokeStorage,
+  flush: (id, storageEpoch) => requestRadialFlush({ id, storageEpoch, requestId: crypto.randomUUID() }, {
+    listen: callback => listen<RadialFlushReply>("radial-note-flushed", ({ payload }) => callback(payload)),
+    send: request => emitTo("main", "radial-note-flush", request),
+  }),
+});
 
 function formatTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -67,12 +75,14 @@ export default function RadialMenu() {
   const [activeTab, setActiveTab] = useState<TabKey>("clipboard");
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [clipboardCategory, setClipboardCategory] = useState<ClipType>("all");
-  const [phraseGroupId, setPhraseGroupId] = useState<string | null>(null);
+  const notes = useSyncExternalStore(radialNotes.subscribe, radialNotes.getSnapshot);
+  const phraseGroupId = notes.group;
+  const [pasteFailed, setPasteFailed] = useState(false);
 
   const isRightDownRef = useRef(false);
+  const pasteInFlightRef = useRef(false);
   const visibleRef = useRef(false);
   const showTimestampRef = useRef(0);
-  const lastFocusRef = useRef(0);
   const selectedItemIdRef = useRef<string | null>(null);
   const activeTabRef = useRef<TabKey>("clipboard");
   const clipboardCategoryRef = useRef<ClipType>("all");
@@ -104,39 +114,25 @@ export default function RadialMenu() {
     useClipboardStore.getState().init();
 
     // Listen for theme changes from the main window
-    let unlistenTheme: UnlistenFn | undefined;
-    listen<{ theme: string }>("theme-changed", (e) => {
+    const theme = listen<{ theme: string }>("theme-changed", (e) => {
       document.documentElement.setAttribute("data-theme", e.payload.theme);
-    }).then((fn) => { unlistenTheme = fn; });
+    });
 
     // Listen for language changes from the main window
-    let unlistenLang: UnlistenFn | undefined;
-    listen<{ language: string }>("language-changed", (e) => {
+    const language = listen<{ language: string }>("language-changed", (e) => {
       if (e.payload.language !== i18n.language) {
         i18n.changeLanguage(e.payload.language);
       }
-    }).then((fn) => { unlistenLang = fn; });
-
-    return () => {
-      if (unlistenTheme) unlistenTheme();
-      if (unlistenLang) unlistenLang();
-    };
+    });
+    return ownEventSubscriptions([theme, language], console.error);
   }, []);
 
   const handleTabSwitch = useCallback((key: string) => {
     const tab = key as TabKey;
+    activeTabRef.current = tab;
     setActiveTab(tab);
     setSelectedItemId(null);
     selectedItemIdRef.current = null;
-    if (tab === "phrases") {
-      const { groups, loadPhrases } = usePhraseStore.getState();
-      if (groups.length > 0) {
-        const firstId = groups[0].id;
-        setPhraseGroupId(firstId);
-        phraseGroupIdRef.current = firstId;
-        loadPhrases(firstId);
-      }
-    }
   }, []);
 
   const handleCategorySwitch = useCallback((key: string) => {
@@ -144,9 +140,8 @@ export default function RadialMenu() {
       setClipboardCategory(key as ClipType);
       clipboardCategoryRef.current = key as ClipType;
     } else {
-      setPhraseGroupId(key);
       phraseGroupIdRef.current = key;
-      usePhraseStore.getState().loadPhrases(key);
+      void radialNotes.select(key);
     }
     setSelectedItemId(null);
     selectedItemIdRef.current = null;
@@ -166,6 +161,7 @@ export default function RadialMenu() {
 
   const resetState = useCallback(() => {
     useClipboardStore.getState().setVisible(false);
+    radialNotes.hide();
     isRightDownRef.current = false;
     visibleRef.current = false;
     setVisible(false);
@@ -227,25 +223,22 @@ export default function RadialMenu() {
   }, []);
 
   useEffect(() => {
-    let unlisteners: UnlistenFn[] = [];
+    const down = listen<{ x: number; y: number; theme: string }>("radial-menu-down", (e) => {
+      if (pasteInFlightRef.current) return;
+      // Apply theme synchronously from backend-provided value.
+      document.documentElement.setAttribute("data-theme", e.payload.theme);
+      isRightDownRef.current = true;
+      showTimestampRef.current = Date.now();
+      startPosRef.current = { x: e.payload.x, y: e.payload.y };
+      visibleRef.current = true;
+      setVisible(true);
+      useClipboardStore.getState().setVisible(true);
+      setPasteFailed(false);
+      void radialNotes.show();
+      useClipboardStore.getState().loadRecords();
+    });
 
-    const setup = async () => {
-      const unDown = await listen<{ x: number; y: number; theme: string }>("radial-menu-down", (e) => {
-        console.log("[RadialMenu] radial-menu-down:", e.payload);
-        // Apply theme synchronously from backend-provided value
-        document.documentElement.setAttribute("data-theme", e.payload.theme);
-        isRightDownRef.current = true;
-        showTimestampRef.current = Date.now();
-        startPosRef.current = { x: e.payload.x, y: e.payload.y };
-        visibleRef.current = true;
-        setVisible(true);
-        useClipboardStore.getState().setVisible(true);
-        usePhraseStore.getState().init();
-        // Refresh records from backend to keep in sync with main window
-        useClipboardStore.getState().loadRecords();
-      });
-
-      const unMove = await listen<{ x: number; y: number }>("radial-menu-move", (e) => {
+      const move = listen<{ x: number; y: number }>("radial-menu-move", (e) => {
         if (!isRightDownRef.current) return;
 
         const cssX = e.payload.x;
@@ -260,33 +253,32 @@ export default function RadialMenu() {
         updateHoverFromPoint(cssX, cssY);
       });
 
-      const unUp = await listen("radial-menu-up", async () => {
-        console.log("[RadialMenu] radial-menu-up, visible:", visibleRef.current, "selected:", selectedItemIdRef.current);
-        if (isRightDownRef.current) {
-          if (visibleRef.current && selectedItemIdRef.current) {
-            const itemId = selectedItemIdRef.current;
+    const up = listen("radial-menu-up", async () => {
+      if (!isRightDownRef.current) return;
+      isRightDownRef.current = false;
+      pasteInFlightRef.current = true;
+      try {
+        if (visibleRef.current && selectedItemIdRef.current) {
+          const itemId = selectedItemIdRef.current;
+          if (activeTabRef.current === "phrases") {
+            const state = radialNotes.getSnapshot();
+            if (state.epoch !== null && state.records.some(note => note.id === itemId)) await radialNotes.paste(itemId, state.epoch);
+          } else {
             const { records, pasteRecord } = useClipboardStore.getState();
             const record = records.find((r) => r.id === itemId);
-            if (record) {
-              await pasteRecord(record);
-            } else {
-              const { phrases, pastePhrase } = usePhraseStore.getState();
-              const phrase = phrases.find((p) => p.id === itemId);
-              if (phrase) {
-                await pastePhrase(phrase);
-              }
-            }
+            if (record) await pasteRecord(record);
           }
-          resetState();
-          // Hide the popup window after processing
-          getCurrentWindow().hide();
         }
-      });
-
-      unlisteners = [unDown, unMove, unUp];
-    };
-
-    setup();
+        resetState();
+        await getCurrentWindow().hide();
+      } catch { setPasteFailed(true); }
+      finally { pasteInFlightRef.current = false; }
+    });
+    const changes = ["phrase-groups-changed", "notes-changed", "notes-pruned"].map(name => listen<{ storage_epoch: number }>(name, ({ payload }) => {
+      if (isCurrentStorageIdentity(payload.storage_epoch)) { selectedItemIdRef.current = null; setSelectedItemId(null); void radialNotes.refresh(); }
+    }));
+    const stopEvents = ownEventSubscriptions([down, move, up, ...changes], console.error);
+    const stopIdentity = onStorageIdentity(() => { selectedItemIdRef.current = null; setSelectedItemId(null); radialNotes.hide(); if (visibleRef.current) void radialNotes.show(); });
 
     const handleContextMenu = (e: Event) => {
       e.preventDefault();
@@ -313,12 +305,8 @@ export default function RadialMenu() {
       }
     };
 
-    const handleFocus = () => {
-      lastFocusRef.current = Date.now();
-    };
-
     const handleBlur = () => {
-      if (isRightDownRef.current) {
+      if (visibleRef.current) {
         // Ignore blurs within 1s of show — compositor initialization
         // can cause spurious focus/blur on first show of transparent window.
         if (Date.now() - showTimestampRef.current < 1000) return;
@@ -329,21 +317,18 @@ export default function RadialMenu() {
 
     document.addEventListener("contextmenu", handleContextMenu, true);
     document.addEventListener("wheel", handleWheel, { passive: false });
-    window.addEventListener("focus", handleFocus);
     window.addEventListener("blur", handleBlur);
 
     return () => {
-      unlisteners.forEach((fn) => fn());
+      stopEvents(); stopIdentity(); radialNotes.hide();
       document.removeEventListener("contextmenu", handleContextMenu, true);
       document.removeEventListener("wheel", handleWheel);
-      window.removeEventListener("focus", handleFocus);
       window.removeEventListener("blur", handleBlur);
     };
   }, [resetState, updateHoverFromPoint]);
 
   const records = useClipboardStore((s) => visible ? s.records : EMPTY_RECORDS);
-  const phraseGroups = usePhraseStore((s) => visible ? s.groups : EMPTY_GROUPS);
-  const phrases = usePhraseStore((s) => visible ? s.phrases : EMPTY_PHRASES);
+  const phraseGroups = notes.groups;
 
   const filteredRecords = clipboardCategory === "all"
     ? records
@@ -364,9 +349,9 @@ export default function RadialMenu() {
         type: r.is_api_key ? "apikey" : r.type,
         createdAt: r.created_at,
       }))
-    : phrases.map((p) => ({
+    : notes.records.map((p) => ({
         id: p.id,
-        content: p.content,
+        content: p.summary,
         type: "phrase" as string,
         title: p.title,
       }));
@@ -381,16 +366,16 @@ export default function RadialMenu() {
         { key: "file", label: t("clipboard.file") },
         { key: "apikey", label: t("clipboard.apikey") },
       ]
-    : phraseGroups.map((g) => ({
+    : [{ key: RADIAL_ALL, label: t("clipboard.all") }, { key: RADIAL_UNGROUPED, label: t("notes.ungrouped") }, ...phraseGroups.map((g) => ({
         key: g.id,
         label: g.name,
-      }));
+      }))];
 
   const activeCategory = activeTab === "clipboard" ? clipboardCategory : phraseGroupId ?? phraseGroups[0]?.id;
 
   if (!visible) return null;
   return (
-    <div className={`radial-menu-overlay${visible ? "" : " radial-menu-hidden"}`}>
+    <div className="radial-menu-overlay">
       <div className="radial-menu-popup">
         <div className="radial-menu-nav">
           {(["clipboard", "phrases"] as TabKey[]).map((tab) => (
@@ -424,9 +409,13 @@ export default function RadialMenu() {
           </div>
         )}
 
-        <div className="radial-menu-list" data-radial-list>
+        {pasteFailed && <button type="button" className="radial-menu-empty" onClick={() => { resetState(); void getCurrentWindow().hide(); }}>{t("radialMenu.pasteFailed")}</button>}
+        <div className="radial-menu-list" data-radial-list onScroll={event => {
+          const element = event.currentTarget;
+          if (activeTab === "phrases" && element.scrollHeight - element.scrollTop - element.clientHeight < 80) void radialNotes.more();
+        }}>
           {items.length === 0 ? (
-            <div className="radial-menu-empty">{t("radialMenu.empty")}</div>
+            <div className="radial-menu-empty">{t(activeTab === "phrases" && notes.error ? notes.error : activeTab === "phrases" && notes.loading ? "radialMenu.loading" : "radialMenu.empty")}</div>
           ) : (
             items.map((item) => (
               <div

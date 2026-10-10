@@ -45,6 +45,7 @@ export const useNotesWorkspace = create<NotesWorkspace>((set,get) => ({
   },
   back: () => {
     const { coordinator, selectedId } = get();
+    const navigation = generation;
     // Decide "is this draft safe to drop" only after the pending write settles:
     // flushing a dirty session can still fail (conflict, storage change), and
     // reading the status before that point would release the quick draft on a
@@ -52,7 +53,9 @@ export const useNotesWorkspace = create<NotesWorkspace>((set,get) => ({
     const settle = selectedId ? coordinator?.flush(selectedId).catch(() => {}) ?? Promise.resolve() : Promise.resolve();
     void settle.then(() => {
       const current = get();
-      if (current.coordinator !== coordinator || current.selectedId !== selectedId) return;
+      // A newer open can still be reading with the old selectedId, including
+      // reopening the same record. Identity alone cannot detect that navigation.
+      if (navigation !== generation || current.coordinator !== coordinator || current.selectedId !== selectedId) return;
       if (selectedId && coordinator?.getSession(selectedId)?.status === "empty") void coordinator.discard(selectedId).catch(() => {});
       const session = selectedId ? coordinator?.getSession(selectedId) : null;
       const completed = !session || session.status === "saved" || session.status === "empty";

@@ -1,5 +1,5 @@
 use base64::Engine;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -2404,21 +2404,83 @@ pub fn set_user_api_key(app: AppHandle, id: String, value: bool, expected_storag
     require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
     let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let content: String = conn.query_row("SELECT content FROM clipboard_records WHERE id = ?1", params![&id], |row| row.get(0)).map_err(|e| e.to_string())?;
+    set_user_api_key_conn(&conn, &id, value)
+}
+
+// Manual marking supports long tokens/JWTs/PEM keys; the 200-byte automatic
+// detection heuristic is deliberately unrelated to this 16 KiB input budget.
+const MANUAL_API_KEY_MAX_BYTES: usize = 16 * 1024;
+fn set_user_api_key_conn(conn: &Connection, id: &str, value: bool) -> Result<(), String> {
+    let (record_type, content): (String, String) = conn.query_row(
+        "SELECT type,content FROM clipboard_records WHERE id=?1", [id], |row| Ok((row.get(0)?, row.get(1)?))
+    ).optional().map_err(|_| "clipboard.updateFailed")?.ok_or("clipboard.recordNotFound")?;
+    if !matches!(record_type.as_str(), "text" | "link") { return Err("clipboard.invalidRecordType".into()); }
+    if value {
+        // Bound the ciphertext before decoding it, then apply the limit to the
+        // recovered UTF-8 bytes, not DPAPI/base64 overhead.
+        if content.len() > MANUAL_API_KEY_MAX_BYTES * 2 + 4096 { return Err("clipboard.apiKeyTooLong".into()); }
+        let plain = crate::secrets::reveal(&content).map_err(|_| "clipboard.updateFailed")?;
+        if plain.len() > MANUAL_API_KEY_MAX_BYTES { return Err("clipboard.apiKeyTooLong".into()); }
+    }
     let stored_content = if value && !crate::secrets::is_protected(&content) {
-        crate::secrets::protect(&content)?
+        crate::secrets::protect(&content).map_err(|_| "clipboard.updateFailed")?
     } else { content };
     conn.execute(
         "UPDATE clipboard_records SET user_api_key = ?1, content = ?2 WHERE id = ?3",
         params![value as i64, stored_content, id],
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|_| "clipboard.updateFailed")?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn manual_key_db(kind: &str, content: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE clipboard_records(id TEXT PRIMARY KEY,type TEXT,content TEXT,user_api_key INTEGER DEFAULT 0);").unwrap();
+        conn.execute("INSERT INTO clipboard_records(id,type,content) VALUES('record',?1,?2)", params![kind,content]).unwrap();
+        conn
+    }
+    fn manual_key_row(conn: &Connection) -> (String, i64) {
+        conn.query_row("SELECT content,user_api_key FROM clipboard_records WHERE id='record'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap()
+    }
+    #[test]
+    fn manual_api_key_rejects_path_types_without_changing_content_or_flag() {
+        for kind in ["image", "file", "explorer"] {
+            let conn = manual_key_db(kind, "images/synthetic.png");
+            let before = manual_key_row(&conn);
+            assert_eq!(set_user_api_key_conn(&conn, "record", true).unwrap_err(), "clipboard.invalidRecordType");
+            assert_eq!(manual_key_row(&conn), before);
+        }
+    }
+    #[test]
+    fn manual_api_key_supports_long_text_and_link_keys_and_ciphertext_retries() {
+        for kind in ["text", "link"] {
+            let plain = "k".repeat(MANUAL_API_KEY_MAX_BYTES);
+            let conn = manual_key_db(kind, &plain);
+            set_user_api_key_conn(&conn, "record", true).unwrap();
+            let (stored, flag) = manual_key_row(&conn);
+            assert!(crate::secrets::is_protected(&stored)); assert_eq!(flag, 1);
+            assert_eq!(crate::secrets::reveal(&stored).unwrap(), plain);
+            set_user_api_key_conn(&conn, "record", true).unwrap();
+            assert_eq!(manual_key_row(&conn).0, stored);
+        }
+    }
+    #[test]
+    fn manual_api_key_rejects_oversized_utf8_without_mutation_but_allows_unmarking() {
+        for plain in ["k".repeat(MANUAL_API_KEY_MAX_BYTES + 1), "中".repeat(MANUAL_API_KEY_MAX_BYTES / 3 + 1)] {
+            for content in [plain.clone(), crate::secrets::protect(&plain).unwrap()] {
+                let conn = manual_key_db("text", &content);
+                let before = manual_key_row(&conn);
+                assert_eq!(set_user_api_key_conn(&conn, "record", true).unwrap_err(), "clipboard.apiKeyTooLong");
+                assert_eq!(manual_key_row(&conn), before);
+                set_user_api_key_conn(&conn, "record", false).unwrap();
+                assert_eq!(manual_key_row(&conn).0, content);
+            }
+        }
+    }
 
     fn legacy_v3(conn: &Connection) {
         initialize_schema_v1(conn).unwrap();

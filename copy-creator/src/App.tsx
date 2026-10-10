@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore }
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emitTo } from "@tauri-apps/api/event";
+import { answerRadialFlush, type RadialFlushRequest } from "./lib/radialNoteFlush";
+import { ownEventSubscriptions } from "./lib/eventSubscriptions";
 import ClipboardPage from "./pages/ClipboardPage";
 import VaultSession from "./components/VaultSession";
 import { useVaultStore } from "./stores/vaultStore";
@@ -108,6 +110,14 @@ function App() {
     window.addEventListener("open-note", openNote);
     return () => window.removeEventListener("open-note", openNote);
   }, []);
+
+  useEffect(() => ownEventSubscriptions([listen<RadialFlushRequest>("radial-note-flush", async ({ payload }) => {
+    if (!payload || typeof payload.id !== "string" || typeof payload.requestId !== "string" || !Number.isSafeInteger(payload.storageEpoch)) return;
+    const reply = await answerRadialFlush(payload,
+      async () => (await (await import("./lib/notes")).getNoteCoordinator()).storageEpoch,
+      () => saveBarrier.run("radialPaste", async () => {}));
+    await emitTo("radial-menu", "radial-note-flushed", reply).catch(saveBarrier.reportError.bind(saveBarrier));
+  })], error => saveBarrier.reportError(error)), []);
 
   useEffect(() => {
     let disposed = false, processing = false;

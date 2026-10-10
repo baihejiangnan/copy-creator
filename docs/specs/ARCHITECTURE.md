@@ -1,5 +1,9 @@
 # Copy Creator — 产品架构文档
 
+2026-10-10 轮盘接手：独立 WebView 使用只读 RadialNotes，通过 get_suiji_groups/list_suiji 有界读取摘要，命中前请求主窗 saveBarrier flush，匹配 requestId/epoch 后重新 get_note 并带 epoch 原生粘贴。握手 11 秒总上限，注册迟到也释放；失败不降级读取旧稿。轮盘不导入 notesWorkspace/coordinator 值依赖，事件不携带正文。原生手动 Key 标记只接受 text/link、最多 16 KiB UTF-8 原文，密文重试不重复加密。见[继续修复验证](../verification/2026-10-10-radial-notes-and-key.md)。
+
+2026-10-10 接手复核：`notesWorkspace.back()` 在等待保存后同时校验导航代次、coordinator 和选中 ID，避免旧返回回调取消正在读取的新导航。分组命令保留 lifecycle producer 许可，并在连接锁内复核/返回实际 storage epoch；适配 notes 的结构化错误为既有字符串命令错误码。存储迁移空目标判定包含 `note_group_colors`，已验证暂存凭据的重试路径保持。源码、回归与验收边界见[接手记录](../verification/2026-10-10-agent-handoff.md)。
+
 2026-10-10 随记整合：`PhrasePage/SuijiPage` 复用 `NoteEditor`、`NoteCoordinator`、有界 `NoteFeed` 和原生粘贴，不再新增独立便签侧栏。schema 6 新增 `note_organization`/`note_group_colors`，旧 `phrases` 在同一迁移事务中提升为 notes，旧分组沿用；`list_suiji` 提供摘要分页、分组过滤及可选 `sort=updated|created`；原生白名单选择对应时间列，与 ID 一起倒序构建游标，前端切换排序重置分页/代次并保留过滤范围，未传排序的旧接口行为保持，`organize_note` 使用 mutation ID、revision CAS 和存储代次。分组删除推进记录 revision，保留正文与常用。全局新建快捷键与窗口快捷键分别注册，设置失败回滚。 `RecordPreview` 通过独立 `LatestQuery` 按需读取一个完整预览，不占用编辑草稿缓存，迟到响应按挂载状态和存储代次拒绝；菜单样式集中到 `context-menu.css`。编辑分组使用 `RecordGroupSelect` 包装通用 `SelectMenu`，定位、滚动、焦点及动效样式由共享组件维护，通过 portal 渲染并按可视窗口定位，限制宽高、内部滚动、键盘及关闭时焦点处理；随记搜索直接复用剪贴板的 `SearchInput`，新增可选长度和组合事件参数以保留查询合同。默认灰色分组的显示色由 ID 稳定派生，用户自选颜色继续来自组织数据，数据库协议未变。协议与实测见[随记设计](../features/notes-design.md#2026-10-10-随记整合当前交互)、[随记验证](../verification/2026-10-10-suiji.md)。
 
 收尾补充：O-01 基线与 O-02 字体集合验收已收回；连续粘贴补查获得外部剪贴板占用证据，默认已加入有界等待、焦点/序列校验与失败可见提示；最终连续 20 次复验第 17 次仍空，整体粘贴验收未通过，保留外部目标无确认协议的边界。最终 Release 46,393,856 字节，NSIS/MSI 32.19/33.94 MB；20MB 按用户指示为尽力参考。详见[粘贴等待与失败提示收尾](../verification/2026-10-08-closeout.md#粘贴等待与失败提示收尾)，整体状态以 TODO 为准。
@@ -334,8 +338,8 @@ src/
   - 无边框透明窗口（decorations: false, transparent: true）
   - 主窗口默认 520×600，最小 440×420；左侧可调整宽度的导航，右侧活动页面
   - 主页面通过 React state 切换（clipboard / phrases / translate / vault / settings）
-  - 页面模块当前静态导入，但仅活动主页面挂载
-  - 启动时创建隐藏 radial-menu WebView，使用 ?radial=1 选择入口
+  - 剪贴板保持主入口依赖，其余主业务页按需加载，仅活动页面挂载
+  - 启动时创建隐藏 radial-menu WebView，使用 radial.html / src/radial.tsx 独立入口
   - 两个 WebView 各自拥有前端 store、图片缓存和队列，不共享 JS 内存
   - 窗口支持拖拽调整尺寸（resizable: true）
   - 置顶模式通过 toggle_always_on_top 命令切换

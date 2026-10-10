@@ -47,8 +47,10 @@ type NotesWorkspaceStore = {
   getState: () => {
     create: () => string;
     back: () => void;
+    open: (id: string) => Promise<void>;
     selectedId: string | null;
     quickId: string | null;
+    opening: boolean;
   };
   setState: (patch: Record<string, unknown>) => void;
 };
@@ -57,6 +59,7 @@ function loadModules(options: {
   coordinator: ReturnType<typeof fakeCoordinator>["coordinator"];
   invoke: Invoke;
   runOperation?: (operation: () => Promise<void>) => Promise<void>;
+  readNote?: (id: string) => Promise<unknown>;
 }) {
   const modules = new Map<string, Record<string, unknown>>();
   const load = (file: string): Record<string, unknown> => {
@@ -89,7 +92,7 @@ function loadModules(options: {
         getNoteFeed: async () => ({ invalidate() {} }),
         // The real `readNote` returns the cached session untouched, and the fake
         // exposes no session for an unknown id — same contract.
-        readNote: async (id: string) => options.coordinator.getSession(id),
+        readNote: options.readNote ?? (async (id: string) => options.coordinator.getSession(id)),
       };
       if (name === "./lifecycle" || name === "../lib/lifecycle") return {
         saveBarrier: { run: (_kind: string, operation: () => Promise<void>) => options.runOperation ? options.runOperation(operation) : operation() },
@@ -174,4 +177,46 @@ test("back() releases the quick draft only after the flush settles as saved", as
   assert.equal(store.getState().selectedId, null, "back() clears the selection after a successful flush");
   assert.equal(store.getState().quickId, null, "a saved draft releases the quick slot");
   void originalFlush;
+});
+
+for (const destination of ["quick", "another-record"]) {
+  test(`back() cannot cancel a newer open(${destination}) while its read is pending`, async () => {
+    const draft = note("quick");
+    const f = fakeCoordinator([draft, note("another-record")]);
+    let finishFlush!: () => void;
+    let finishRead!: () => void;
+    const flushed = new Promise<void>(resolve => { finishFlush = resolve; });
+    const read = new Promise<void>(resolve => { finishRead = resolve; });
+    f.coordinator.flush = () => flushed;
+    const load = loadModules({ coordinator: f.coordinator, readNote: () => read,
+      invoke: () => { throw Error("no IPC expected"); } });
+    const store = (load("stores/notesWorkspace") as { useNotesWorkspace: NotesWorkspaceStore }).useNotesWorkspace;
+    store.setState({ coordinator: f.coordinator, selectedId: draft.id, quickId: draft.id });
+    f.coordinator.setActive(draft.id);
+
+    store.getState().back();
+    const opening = store.getState().open(destination);
+    finishFlush();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(store.getState().opening, true, "an old back must not cancel the newer navigation");
+    finishRead();
+    await opening;
+    assert.equal(store.getState().selectedId, destination);
+    assert.equal(f.state.activeId, destination);
+  });
+}
+
+test("back() preserves an unsaved quick draft when flush fails", async () => {
+  const draft = note("quick");
+  const f = fakeCoordinator([draft]);
+  f.sessions.get(draft.id)!.status = "conflict";
+  f.coordinator.flush = async () => { throw { code: "notes.conflict" }; };
+  const load = loadModules({ coordinator: f.coordinator, invoke: () => { throw Error("no IPC expected"); } });
+  const store = (load("stores/notesWorkspace") as { useNotesWorkspace: NotesWorkspaceStore }).useNotesWorkspace;
+  store.setState({ coordinator: f.coordinator, selectedId: draft.id, quickId: draft.id });
+  store.getState().back();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(store.getState().quickId, draft.id);
+  assert.equal(f.sessions.get(draft.id)?.draft.body, draft.body);
+  assert.equal(f.state.discarded.length, 0);
 });

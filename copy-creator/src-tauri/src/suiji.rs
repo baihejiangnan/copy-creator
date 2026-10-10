@@ -46,18 +46,21 @@ fn valid_color(color: &str)->bool { color.len()==7 && color.starts_with('#') && 
 pub fn get_suiji_groups(app:AppHandle,expected_storage_epoch:u64)->Result<crate::notes::StorageResult<Vec<serde_json::Value>>,String> {
     let lifecycle=app.state::<crate::lifecycle::LifecycleState>();
     let _producer=lifecycle.try_producer().ok_or("lifecycle.busy")?;
-    crate::db::require_storage_epoch(&app,Some(expected_storage_epoch))?;
     let state=app.state::<crate::db::DbState>(); let conn=state.conn.lock().map_err(|_|"notes.databaseFailed")?;
+    // The producer permit already excludes relocation. Recheck under the connection
+    // lock as well, and stamp the response from that state like the notes commands.
+    let epoch=crate::notes::check_epoch(&state,expected_storage_epoch).map_err(|error|error.code.to_string())?;
     // IPC rows include counts; portable backup rows deliberately omit them.
     let rows=groups(&conn).map_err(|_|"notes.databaseFailed")?.into_iter().map(|g|serde_json::json!({"id":g.id,"name":g.name,"color":g.color,"sort_order":g.sort_order,"count":g.count})).collect();
-    Ok(crate::notes::StorageResult{storage_epoch:expected_storage_epoch,value:rows})
+    Ok(crate::notes::StorageResult{storage_epoch:epoch,value:rows})
 }
 #[tauri::command]
 pub fn save_suiji_group(app:AppHandle,expected_storage_epoch:u64,id:Option<String>,name:String,color:String,direction:Option<i32>)->Result<(),String> {
     let lifecycle=app.state::<crate::lifecycle::LifecycleState>(); let _producer=lifecycle.try_producer().ok_or("lifecycle.busy")?;
-    crate::db::require_storage_epoch(&app,Some(expected_storage_epoch))?;
     if name.trim().is_empty() || name.chars().count()>128 || !valid_color(&color) {return Err("notes.invalidGroup".into());}
     let state=app.state::<crate::db::DbState>(); let mut conn=state.conn.lock().map_err(|_|"notes.databaseFailed")?;
+    // Keep the read/write paths consistent while retaining the producer permit.
+    crate::notes::check_epoch(&state,expected_storage_epoch).map_err(|error|error.code.to_string())?;
     let tx=conn.transaction().map_err(|_|"notes.databaseFailed")?;
     let id=id.unwrap_or_else(||uuid::Uuid::new_v4().to_string()); let now=chrono::Utc::now().to_rfc3339();
     if uuid::Uuid::parse_str(&id).is_err() {return Err("notes.invalidGroup".into());}

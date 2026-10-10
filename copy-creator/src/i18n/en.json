@@ -471,6 +471,15 @@
     "pasteApiBase": "Paste Base URL",
     "copyWithComment": "Copy with comment",
     "markApiKey": "Mark as API key",
+    "invalidRecordType": "Only text and links can be marked as API keys",
+    "apiKeyTooLong": "API keys cannot exceed 16 KiB",
+    "updateFailed": "Could not update the record. Try again.",
+    "recordNotFound": "The record no longer exists",
+    "collapseText": "Collapse long text",
+    "expandText": "Expand full text",
+    "loadingText": "Loading",
+    "collapse": "Collapse",
+    "expand": "Expand",
     "unmarkApiKey": "Remove API key mark",
     "paste": "Paste",
     "scrollToTop": "Back to top"
@@ -507,7 +516,9 @@
     "minimize": "Minimize"
   },
   "radialMenu": {
-    "empty": "No items"
+    "empty": "No items",
+    "loading": "Loading…",
+    "pasteFailed": "Save or paste failed. Click to dismiss and retry."
   },
   "notes": {
     "create": "New note",
