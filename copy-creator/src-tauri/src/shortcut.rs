@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU64, AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -18,6 +19,51 @@ static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static HOOK_HANDLE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
 
 static TOGGLING: AtomicBool = AtomicBool::new(false);
+static NOTE_SHORTCUT_ID: AtomicU32 = AtomicU32::new(0);
+static NOTE_SHORTCUT: Mutex<String> = Mutex::new(String::new());
+static NOTE_REQUEST: AtomicBool = AtomicBool::new(false);
+
+pub fn handle_shortcut(app: &AppHandle, shortcut: &tauri_plugin_global_shortcut::Shortcut) {
+    if NOTE_SHORTCUT_ID.load(Ordering::SeqCst) == shortcut.id() {
+        NOTE_REQUEST.store(true,Ordering::SeqCst);
+        if let Some(window)=app.get_webview_window("main") {
+            #[cfg(target_os="windows")]
+            if !window.is_focused().unwrap_or(false) { crate::paste::save_foreground_window(); }
+            let _=window.unminimize(); let _=crate::lifecycle::show_main(&window); let _=window.set_focus();
+        }
+        let _=app.emit("new-note-requested",());
+    } else { toggle_window(app); }
+}
+pub fn initialize_note_shortcut(app:&AppHandle) {
+    let key=crate::db::get_setting(app.clone(),"note_shortcut_key".into()).unwrap_or_else(|_|"Ctrl+Alt+N".into());
+    if key.is_empty() {return;}
+    if register_keyboard_shortcut(app,&key).is_ok() {
+        if let Ok(shortcut)=key.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+            NOTE_SHORTCUT_ID.store(shortcut.id(),Ordering::SeqCst);
+            if let Ok(mut actual)=NOTE_SHORTCUT.lock() {*actual=key;}
+        }
+    } else {log::warn!("note shortcut unavailable; existing shortcut registrations retained");}
+}
+#[tauri::command]
+pub fn pending_note_request()->bool {NOTE_REQUEST.load(Ordering::SeqCst)}
+#[tauri::command]
+pub fn ack_note_request() {NOTE_REQUEST.store(false,Ordering::SeqCst);}
+#[tauri::command]
+pub fn note_shortcut_status()->String {NOTE_SHORTCUT.lock().map(|key|key.clone()).unwrap_or_default()}
+#[tauri::command]
+pub fn save_note_shortcut(app:AppHandle,new_shortcut:String,expected_storage_epoch:Option<u64>)->Result<(),String> {
+    let lifecycle=app.state::<crate::lifecycle::LifecycleState>(); let _producer=lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    crate::db::require_storage_epoch(&app,expected_storage_epoch)?;
+    let mut actual=NOTE_SHORTCUT.lock().map_err(|_|"settings.shortcutUnavailable")?;
+    if *actual == new_shortcut { return crate::db::set_setting(app.clone(), "note_shortcut_key".into(), new_shortcut, expected_storage_epoch); }
+    // The desired setting may exist even if startup registration failed.
+    change_shortcut(&actual,&new_shortcut,
+        |key|register_keyboard_shortcut(&app,key).map_err(|_|"settings.shortcutUnavailable".into()),
+        |key|{let _=unregister_keyboard_shortcut(&app,key);},
+        ||crate::db::set_setting(app.clone(),"note_shortcut_key".into(),new_shortcut.clone(),expected_storage_epoch))?;
+    NOTE_SHORTCUT_ID.store(new_shortcut.parse::<tauri_plugin_global_shortcut::Shortcut>().map(|key|key.id()).unwrap_or(0),Ordering::SeqCst);
+    *actual=new_shortcut; Ok(())
+}
 
 /// RAII guard that ensures TOGGLING is always reset, even on panic.
 struct ToggleGuard;

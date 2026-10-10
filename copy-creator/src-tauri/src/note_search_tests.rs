@@ -8,7 +8,7 @@ fn connection() -> Connection {
     conn
 }
 fn note() -> note_backup::BackupNote {
-    note_backup::BackupNote {
+    note_backup::BackupNote { group_id: None, starred: false,
         id: uuid::Uuid::new_v4().to_string(),
         title: "migration fixture".into(),
         body: "独立中文正文 rare-migration-token".into(),
@@ -56,7 +56,7 @@ fn upgrade_backfills_existing_bodies_refs_and_survives_reopen_vacuum() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(candidates(&conn, "rare-migration-token").len(), 1);
     assert_eq!(candidates(&conn, "only-reference-token").len(), 1);

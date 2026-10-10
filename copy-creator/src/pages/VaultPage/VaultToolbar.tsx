@@ -1,7 +1,8 @@
 import { useTranslation } from "react-i18next";
+import SelectMenu from "../../components/SelectMenu";
 import { Icons } from "../../components/Icons";
 import { useVaultStore } from "../../stores/vaultStore";
-import { normalizeVaultAutoLock, VAULT_AUTO_LOCK_OPTIONS, type VaultAutoLock } from "../../types/vault";
+import { normalizeVaultAutoLock, VAULT_AUTO_LOCK_OPTIONS } from "../../types/vault";
 
 interface VaultToolbarProps {
   onChangeMaster?: () => void;
@@ -17,18 +18,12 @@ export default function VaultToolbar({ onChangeMaster, masterDisabled }: VaultTo
     <span className={`vault-status-indicator${status?.unlocked ? "" : " locked"}`}>
       {t(status?.unlocked ? "vault.unlocked" : "vault.lockedStatus")}
     </span>
-    <label className="vault-lock-setting-row">
+    <div className="vault-lock-setting-row">
       <span>{t("vault.autoLockShort")}</span>
-      <select
-        value={autoLock}
-        title={t(`vault.autoLockHints.${autoLock}`)}
-        aria-label={t("vault.autoLock")}
-        disabled={busy || settingBusy}
-        onChange={(event) => void setAutoLock(event.target.value as VaultAutoLock)}
-      >
-        {VAULT_AUTO_LOCK_OPTIONS.map((value) => <option key={value} value={value}>{t(`vault.autoLockOptions.${value}`)}</option>)}
-      </select>
-    </label>
+      <SelectMenu value={autoLock} title={t(`vault.autoLockHints.${autoLock}`)} ariaLabel={t("vault.autoLock")}
+        disabled={busy || settingBusy} onChange={value => void setAutoLock(value)}
+        options={VAULT_AUTO_LOCK_OPTIONS.map(value => ({ value, label: t(`vault.autoLockOptions.${value}`) }))} />
+    </div>
     {status?.unlocked && <div className="vault-actions">
       <button type="button" className="vault-text-button" onClick={onChangeMaster} disabled={masterDisabled}>{t("vault.changeMaster")}</button>
       <button type="button" className="vault-button secondary small" onClick={() => void lock()}>{Icons.vault}{t("vault.lock")}</button>

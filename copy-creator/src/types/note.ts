@@ -27,13 +27,16 @@ export interface NoteSummary {
   archived_at_ms: number | null;
   deleted_at_ms: number | null;
   ref_count: number;
+  group_id?: string | null;
+  starred?: boolean;
 }
 export interface Note extends NoteSummary {
   body: string;
   refs: NoteRef[];
   source: NoteSource | null;
 }
-export type NoteFilter = "active" | "archived" | "trash";
+export type NoteFilter = "active" | "archived" | "trash" | "ungrouped" | "starred";
+export type NoteSort = "updated" | "created";
 export type NoteAction = "archive" | "unarchive" | "delete" | "restore";
 export interface NoteCursor { sort_at_ms: number; id: string }
 export interface NotePage { records: NoteSummary[]; next_cursor: NoteCursor | null }

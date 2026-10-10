@@ -20,6 +20,10 @@ pub(crate) struct BackupNote {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub archived_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub group_id: Option<String>,
+    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    pub starred: bool,
 }
 impl BackupNote {
     fn draft(&self) -> NoteDraft {
@@ -35,14 +39,17 @@ impl BackupNote {
             .iter()
             .map(|r| (&r.kind, &r.target, &r.display_name))
             .collect();
-        notes::hash(&(
+        // Default organization preserves hashes from previously imported v3 files.
+        let base = notes::hash(&(
             &self.title,
             &self.body,
             refs,
             &self.source,
             self.archived_at_ms.is_some(),
         ))
-        .map_err(|e| e.code.into())
+        .map_err(|e| e.code.to_string())?;
+        if self.group_id.is_none() && !self.starred { Ok(base) }
+        else { notes::hash(&(base,&self.group_id,self.starred)).map_err(|e|e.code.into()) }
     }
 }
 impl From<notes::Note> for BackupNote {
@@ -56,6 +63,7 @@ impl From<notes::Note> for BackupNote {
             created_at_ms: note.summary.created_at_ms,
             updated_at_ms: note.summary.updated_at_ms,
             archived_at_ms: note.summary.archived_at_ms,
+            group_id: note.summary.group_id, starred: note.summary.starred,
         }
     }
 }
@@ -74,12 +82,17 @@ pub(crate) fn validate(records: &[BackupNote]) -> Result<(), String> {
         {
             return Err("backup.invalidFile".into());
         }
-        notes::validate(&note.draft()).map_err(|_| "backup.invalidFile")?;
+        if note.group_id.as_ref().is_some_and(|id|uuid::Uuid::parse_str(id).is_err()) { return Err("backup.invalidFile".into()); }
+        // Historical phrases had no content length limit. Preserve their complete
+        // bytes; new edits continue to obey the standard record limits.
+        if !note.source.as_ref().is_some_and(|s|s.kind=="phrase") {
+            notes::validate(&note.draft()).map_err(|_| "backup.invalidFile")?;
+        } else if !note.refs.is_empty() { return Err("backup.invalidFile".into()); }
         if note.refs.iter().any(|r| !refs.insert(&r.id)) {
             return Err("backup.invalidFile".into());
         }
         if let Some(source) = &note.source {
-            if !matches!(source.kind.as_str(), "text" | "link" | "file" | "explorer")
+            if !matches!(source.kind.as_str(), "text" | "link" | "file" | "explorer" | "phrase")
                 || source.record_id.len() > 128
                 || source.source_app.len() > 4096
                 || source.captured_at_ms < 0
@@ -203,7 +216,19 @@ fn restore(conn: &Connection, note: &BackupNote, id: &str) -> Result<(), String>
         .map_err(|_| "backup.invalidFile")?;
     conn.execute("INSERT INTO notes(id,title,body,summary,char_count,byte_count,created_at_ms,updated_at_ms,revision,archived_at_ms,deleted_at_ms,source_json,creation_mutation_id,creation_hash,last_mutation_id,last_mutation_hash)
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,?9,NULL,?10,?11,?12,?11,?12)",params![id,draft.title,draft.body,summary,chars,bytes,note.created_at_ms,note.updated_at_ms,note.archived_at_ms,source,mutation,request_hash]).map_err(|_| "backup.databaseFailed")?;
-    notes::write_refs(conn, id, &draft.refs).map_err(|_| "backup.databaseFailed".to_string())
+    notes::write_refs(conn, id, &draft.refs).map_err(|_| "backup.databaseFailed".to_string())?;
+    conn.execute("INSERT INTO note_organization(note_id,group_id,starred) VALUES(?1,?2,?3)",params![id,note.group_id,note.starred]).map_err(|_|"backup.databaseFailed")?;
+    Ok(())
+}
+
+pub(crate) fn promote_phrases(conn: &Connection) -> Result<(),String> {
+    loop {
+        let rows: Vec<BackupNote> = conn.prepare("SELECT id,title,content,group_id,COALESCE(CAST(strftime('%s',created_at) AS INTEGER)*1000,0),COALESCE(CAST(strftime('%s',updated_at) AS INTEGER)*1000,0) FROM phrases ORDER BY id LIMIT 100").map_err(|_|"notes.databaseFailed")?
+            .query_map([],|r| {let id:String=r.get(0)?; Ok(BackupNote {id:id.clone(),title:r.get(1)?,body:r.get(2)?,refs:vec![],source:Some(NoteSource{kind:"phrase".into(),record_id:id,source_app:String::new(),captured_at_ms:r.get(4)?}),created_at_ms:r.get(4)?,updated_at_ms:r.get(5)?,archived_at_ms:None,group_id:Some(r.get(3)?),starred:false})}).map_err(|_|"notes.databaseFailed")?.collect::<rusqlite::Result<_>>().map_err(|_|"notes.databaseFailed")?;
+        if rows.is_empty() {return Ok(());}
+        apply(conn,&rows)?;
+        for row in rows {conn.execute("DELETE FROM phrases WHERE id=?1",[row.id]).map_err(|_|"notes.databaseFailed")?;}
+    }
 }
 
 #[cfg(test)]
@@ -229,7 +254,23 @@ mod tests {
             created_at_ms: 1,
             updated_at_ms: 2,
             archived_at_ms: Some(3),
+            group_id: None, starred: false,
         }
+    }
+    #[test]
+    fn legacy_promotion_preserves_whitespace_long_bodies_groups_and_collisions() {
+        let mut c=connection(); let original=fixture(); let group=uuid::Uuid::new_v4().to_string();
+        {let tx=c.transaction().unwrap();apply(&tx,&[original.clone()]).unwrap();tx.commit().unwrap();}
+        c.execute("INSERT INTO phrase_groups VALUES(?1,'legacy',0,'now','now')",[&group]).unwrap();
+        let body=format!("  raw\r\n{}  ","字".repeat(90_000));
+        c.execute("INSERT INTO phrases VALUES(?1,?2,'old',?3,0,'2026-01-01','2026-01-02')",params![original.id,group,body]).unwrap();
+        {let tx=c.transaction().unwrap();promote_phrases(&tx).unwrap();tx.commit().unwrap();}
+        assert_eq!(notes::read_note(&c,&original.id).unwrap().body,original.body);
+        let migrated: String=c.query_row("SELECT n.id FROM notes n JOIN note_organization o ON o.note_id=n.id WHERE o.group_id=?1",[&group],|r|r.get(0)).unwrap();
+        assert_ne!(migrated,original.id); assert_eq!(notes::read_note(&c,&migrated).unwrap().body,body);
+        promote_phrases(&c).unwrap();
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM phrases",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM notes",[],|r|r.get::<_,i64>(0)).unwrap(),2);
     }
     #[test]
     fn restore_remaps_refs_and_protocol_then_repeated_import_keeps_local_edits() {

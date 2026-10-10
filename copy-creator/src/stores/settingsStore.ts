@@ -23,6 +23,7 @@ interface SettingsState {
   translateProxy: string;
   language: string;
   shortcutKey: string;
+  noteShortcutKey: string;
   radialMenuEnabled: boolean;
   autostartEnabled: boolean;
   maxHistoryItems: number;
@@ -55,6 +56,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   translateProxy: "",
   language: "zh-CN",
   shortcutKey: "",
+  noteShortcutKey: "Ctrl+Alt+N",
   radialMenuEnabled: true,
   autostartEnabled: false,
   maxHistoryItems: 2000,
@@ -97,6 +99,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         translateProxy: settings.translate_proxy || "",
         language: settings.language || "zh-CN",
         shortcutKey: settings.shortcut_key || "",
+        noteShortcutKey: settings.note_shortcut_key ?? "Ctrl+Alt+N",
         radialMenuEnabled: settings.radial_menu_enabled !== "0",
         maxHistoryItems: Number(settings.max_history_items) || 2000,
         maxStorageMb: Number(settings.max_storage_mb) || 500,

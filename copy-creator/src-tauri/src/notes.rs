@@ -38,7 +38,8 @@ pub(crate) fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         WHERE deleted_at_ms IS NULL AND archived_at_ms IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_notes_trash ON notes(deleted_at_ms DESC, id DESC)
         WHERE deleted_at_ms IS NOT NULL;",
-    )
+    )?;
+    crate::suiji::init_schema(conn)
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +95,8 @@ pub struct NoteSummary {
     pub archived_at_ms: Option<i64>,
     pub deleted_at_ms: Option<i64>,
     pub ref_count: i64,
+    pub group_id: Option<String>,
+    pub starred: bool,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct Note {
@@ -107,8 +110,16 @@ pub struct Note {
 #[serde(rename_all = "lowercase")]
 pub enum NoteFilter {
     Active,
+    Ungrouped,
+    Starred,
     Archived,
     Trash,
+}
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteSort {
+    Updated,
+    Created,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -192,18 +203,22 @@ fn summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
         archived_at_ms: row.get(8)?,
         deleted_at_ms: row.get(9)?,
         ref_count: row.get(10)?,
+        group_id: row.get(11)?,
+        starred: row.get(12)?,
     })
 }
 const SUMMARY_COLUMNS: &str = "n.id,n.title,n.summary,n.char_count,n.byte_count,n.created_at_ms,
     n.updated_at_ms,n.revision,n.archived_at_ms,n.deleted_at_ms,
-    (SELECT COUNT(*) FROM note_refs r WHERE r.note_id=n.id)";
+    (SELECT COUNT(*) FROM note_refs r WHERE r.note_id=n.id),
+    (SELECT group_id FROM note_organization o WHERE o.note_id=n.id),
+    COALESCE((SELECT starred FROM note_organization o WHERE o.note_id=n.id),0)";
 
 pub(crate) fn read_note(conn: &Connection, id: &str) -> Result<Note> {
     let (summary, body, source_json): (NoteSummary, String, Option<String>) = conn
         .query_row(
             &format!("SELECT {SUMMARY_COLUMNS},n.body,n.source_json FROM notes n WHERE n.id=?1"),
             [id],
-            |row| Ok((summary_row(row)?, row.get(11)?, row.get(12)?)),
+            |row| Ok((summary_row(row)?, row.get(13)?, row.get(14)?)),
         )
         .optional()
         .map_err(database_error)?
@@ -239,6 +254,12 @@ fn read_page(
     cursor: Option<NoteCursor>,
     limit: usize,
 ) -> Result<NotePage> {
+    read_scoped_page(conn, filter, search, cursor, limit, None)
+}
+fn read_scoped_page(conn: &Connection, filter: NoteFilter, search: &str, cursor: Option<NoteCursor>, limit: usize, group_id: Option<String>) -> Result<NotePage> {
+    read_sorted_page(conn, filter, search, cursor, limit, group_id, None)
+}
+fn read_sorted_page(conn: &Connection, filter: NoteFilter, search: &str, cursor: Option<NoteCursor>, limit: usize, group_id: Option<String>, order: Option<NoteSort>) -> Result<NotePage> {
     if search.chars().count() > 256 {
         return Err(error("notes.searchTooLong"));
     }
@@ -257,6 +278,8 @@ fn read_page(
             "n.deleted_at_ms IS NULL AND n.archived_at_ms IS NULL",
             "n.updated_at_ms",
         ),
+        NoteFilter::Ungrouped => ("n.deleted_at_ms IS NULL AND n.archived_at_ms IS NULL AND NOT EXISTS(SELECT 1 FROM note_organization o WHERE o.note_id=n.id AND o.group_id IS NOT NULL)", "n.updated_at_ms"),
+        NoteFilter::Starred => ("n.deleted_at_ms IS NULL AND n.archived_at_ms IS NULL AND EXISTS(SELECT 1 FROM note_organization o WHERE o.note_id=n.id AND o.starred=1)", "n.updated_at_ms"),
         NoteFilter::Archived => (
             "n.deleted_at_ms IS NULL AND n.archived_at_ms IS NOT NULL",
             "n.updated_at_ms",
@@ -266,12 +289,18 @@ fn read_page(
             "n.deleted_at_ms",
         ),
     };
+    let sort = match order {
+        Some(NoteSort::Created) => "n.created_at_ms",
+        Some(NoteSort::Updated) => "n.updated_at_ms",
+        None => sort,
+    };
     let sql = format!(
         "SELECT {SUMMARY_COLUMNS} FROM notes n WHERE {condition} {candidate_filter}
         AND (?1='' OR n.title LIKE ?2 ESCAPE '\\' OR n.body LIKE ?2 ESCAPE '\\'
             OR EXISTS(SELECT 1 FROM note_refs r WHERE r.note_id=n.id AND
                 (r.display_name LIKE ?2 ESCAPE '\\' OR r.target LIKE ?2 ESCAPE '\\')))
         AND (?3 IS NULL OR {sort} < ?3 OR ({sort}=?3 AND n.id < ?4))
+        AND (?8 IS NULL OR EXISTS(SELECT 1 FROM note_organization o WHERE o.note_id=n.id AND o.group_id=?8))
         AND ?5 IS NOT NULL ORDER BY {sort} DESC,n.id DESC LIMIT ?6"
     );
     let limit = limit.clamp(1, 100);
@@ -289,7 +318,8 @@ fn read_page(
                 id,
                 chrono::Utc::now().timestamp_millis() - TRASH_RETENTION_MS,
                 (limit + 1) as i64,
-                candidate_json
+                candidate_json,
+                group_id
             ],
             summary_row,
         )
@@ -300,10 +330,11 @@ fn read_page(
     records.truncate(limit);
     let next_cursor = if has_more {
         records.last().map(|last| NoteCursor {
-            sort_at_ms: if matches!(filter, NoteFilter::Trash) {
-                last.deleted_at_ms.unwrap()
-            } else {
-                last.updated_at_ms
+            sort_at_ms: match order {
+                Some(NoteSort::Created) => last.created_at_ms,
+                Some(NoteSort::Updated) => last.updated_at_ms,
+                None if matches!(filter, NoteFilter::Trash) => last.deleted_at_ms.unwrap(),
+                None => last.updated_at_ms,
             },
             id: last.id.clone(),
         })
@@ -759,6 +790,38 @@ pub async fn list_notes(
     .await
 }
 #[tauri::command]
+pub async fn list_suiji(app: AppHandle, expected_storage_epoch: u64, filter: NoteFilter, search: String, cursor: Option<NoteCursor>, limit: Option<usize>, group_id: Option<String>, sort: Option<NoteSort>) -> Result<StorageResult<NotePage>> {
+    run(app, expected_storage_epoch, false, "suiji_list", move |conn| read_sorted_page(conn, filter, &search, cursor, limit.unwrap_or(50), group_id, sort)).await
+}
+fn organize_conn(conn: &mut Connection, id: &str, expected_revision: i64, mutation_id: &str, group_id: Option<String>, starred: bool) -> Result<MutationResult> {
+    valid_id(id)?; valid_id(mutation_id)?;
+        let tx = conn.transaction().map_err(database_error)?;
+        let note = read_note(&tx, &id)?;
+        let hash = hash(&("organize", &id, expected_revision, &group_id, starred))?;
+        let (last_id, last_hash): (String,String) = tx.query_row("SELECT last_mutation_id,last_mutation_hash FROM notes WHERE id=?1", [&id], |r| Ok((r.get(0)?,r.get(1)?))).map_err(database_error)?;
+        if last_id == mutation_id {
+            if last_hash != hash { return Err(error("notes.mutationMismatch")); }
+            return Ok(MutationResult { note, mutation_id: mutation_id.into(), applied: false });
+        }
+        if note.summary.revision != expected_revision { return Err(NoteError {code:"notes.conflict",current_revision:Some(note.summary.revision)}); }
+        if note.summary.deleted_at_ms.is_some() { return Err(error("notes.deleted")); }
+        if let Some(group) = &group_id {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM phrase_groups WHERE id=?1)",[group],|r|r.get(0)).map_err(database_error)?;
+            if !exists { return Err(error("notes.groupMissing")); }
+        }
+        tx.execute("INSERT INTO note_organization(note_id,group_id,starred) VALUES(?1,?2,?3) ON CONFLICT(note_id) DO UPDATE SET group_id=excluded.group_id,starred=excluded.starred",params![id,group_id,starred]).map_err(database_error)?;
+        tx.execute("UPDATE notes SET revision=revision+1,updated_at_ms=?2,last_mutation_id=?3,last_mutation_hash=?4 WHERE id=?1",params![id,chrono::Utc::now().timestamp_millis(),mutation_id,hash]).map_err(database_error)?;
+        let note = read_note(&tx,&id)?; tx.commit().map_err(database_error)?;
+        Ok(MutationResult {note,mutation_id: mutation_id.into(),applied:true})
+}
+#[tauri::command]
+pub async fn organize_note(app: AppHandle, expected_storage_epoch: u64, id: String, expected_revision: i64, mutation_id: String, group_id: Option<String>, starred: bool) -> Result<StorageResult<MutationResult>> {
+    let result = run(app.clone(), expected_storage_epoch, true, "organize", move |conn| {
+        organize_conn(conn, &id, expected_revision, &mutation_id, group_id, starred)
+    }).await?;
+    notify(&app,&result,"organization"); Ok(result)
+}
+#[tauri::command]
 pub async fn get_note(
     app: AppHandle,
     expected_storage_epoch: u64,
@@ -871,6 +934,66 @@ mod tests {
             target: "https://example.com/a".into(),
             display_name: "Reference".into(),
         }
+    }
+    #[test]
+    fn selected_sort_pages_all_scopes_without_skips_or_duplicates() {
+        let mut conn = db();
+        let group = id();
+        conn.execute("INSERT INTO phrase_groups VALUES(?1,'sort group',0,'now','now')", [&group]).unwrap();
+        let mut expected = Vec::new();
+        for (created, updated) in [(300,100),(300,200),(200,300),(100,300),(100,100)] {
+            let note_id = create(&mut conn, &draft("needle sort fixture")).note.summary.id;
+            conn.execute("UPDATE notes SET created_at_ms=?1,updated_at_ms=?2 WHERE id=?3", params![created,updated,&note_id]).unwrap();
+            conn.execute("INSERT INTO note_organization(note_id,group_id,starred) VALUES(?1,?2,1)", params![&note_id,&group]).unwrap();
+            expected.push((created,updated,note_id));
+        }
+        for filter in [NoteFilter::Active,NoteFilter::Archived,NoteFilter::Trash,NoteFilter::Starred,NoteFilter::Ungrouped] {
+            let archived = matches!(filter,NoteFilter::Archived).then_some(1_i64);
+            let deleted = matches!(filter,NoteFilter::Trash).then_some(chrono::Utc::now().timestamp_millis());
+            conn.execute("UPDATE notes SET archived_at_ms=?1,deleted_at_ms=?2",params![archived,deleted]).unwrap();
+            let scope = if matches!(filter,NoteFilter::Ungrouped) { None } else { Some(group.clone()) };
+            conn.execute("UPDATE note_organization SET group_id=?1",[&scope]).unwrap();
+            for order in [NoteSort::Updated,NoteSort::Created] {
+                let mut expected = expected.clone();
+                expected.sort_by(|a,b| {
+                    let at = |x: &(i64,i64,String)| if matches!(order,NoteSort::Created) { x.0 } else { x.1 };
+                    at(b).cmp(&at(a)).then_with(|| b.2.cmp(&a.2))
+                });
+                let mut cursor = None;
+                let mut found = Vec::new();
+                loop {
+                    let page = read_sorted_page(&conn,filter,"needle",cursor,2,scope.clone(),Some(order)).unwrap();
+                    if let Some(next) = &page.next_cursor {
+                        let last = page.records.last().unwrap();
+                        assert_eq!(next.sort_at_ms,if matches!(order,NoteSort::Created) { last.created_at_ms } else { last.updated_at_ms });
+                    }
+                    found.extend(page.records.into_iter().map(|note| note.id));
+                    if page.next_cursor.is_none() { break; }
+                    cursor = page.next_cursor;
+                }
+                assert_eq!(found,expected.into_iter().map(|row| row.2).collect::<Vec<_>>());
+                assert!(read_sorted_page(&conn,filter,"needle",None,2,Some(id()),Some(order)).unwrap().records.is_empty());
+                assert!(read_sorted_page(&conn,filter,"absent",None,2,scope.clone(),Some(order)).unwrap().records.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn organization_is_idempotent_conflict_checked_and_scoped() {
+        let mut conn = db(); let record = create(&mut conn, &draft("raw\r\n  body  ")).note;
+        let group = id();
+        conn.execute("INSERT INTO phrase_groups VALUES(?1,'group',0,'now','now')",[&group]).unwrap();
+        let mutation = id(); let note_id = &record.summary.id;
+        let result = organize_conn(&mut conn,note_id,1,&mutation,Some(group.clone()),true).unwrap();
+        assert!(result.applied); assert_eq!(result.note.body,record.body); assert_eq!(result.note.summary.revision,2);
+        assert_eq!(result.note.summary.group_id,Some(group.clone())); assert!(result.note.summary.starred);
+        assert!(!organize_conn(&mut conn,note_id,1,&mutation,Some(group.clone()),true).unwrap().applied);
+        assert_eq!(organize_conn(&mut conn,note_id,1,&mutation,None,true).unwrap_err().code,"notes.mutationMismatch");
+        assert_eq!(organize_conn(&mut conn,note_id,1,&id(),None,false).unwrap_err().code,"notes.conflict");
+        assert_eq!(organize_conn(&mut conn,note_id,2,&id(),Some(id()),false).unwrap_err().code,"notes.groupMissing");
+        assert_eq!(read_scoped_page(&conn,NoteFilter::Starred,"",None,50,Some(group)).unwrap().records.len(),1);
+        assert!(read_scoped_page(&conn,NoteFilter::Ungrouped,"",None,50,None).unwrap().records.is_empty());
+        organize_conn(&mut conn,note_id,2,&id(),None,false).unwrap();
+        assert_eq!(read_scoped_page(&conn,NoteFilter::Ungrouped,"",None,50,None).unwrap().records.len(),1);
     }
     #[test]
     fn expiry_cleanup_is_bounded_and_cascades_refs_without_touching_live_notes() {

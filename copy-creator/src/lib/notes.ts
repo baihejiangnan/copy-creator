@@ -38,8 +38,8 @@ export function getNoteCoordinator(): Promise<NoteCoordinator> {
 export async function getNoteFeed() {
   const coordinator = await getNoteCoordinator();
   if (!feed) {
-    feed = new NoteFeed(coordinator.storageEpoch, (query) => invoke<StorageResult<NotePage>>("list_notes", {
-      expectedStorageEpoch: query.epoch, filter: query.filter, search: query.search, cursor: query.cursor, limit: 50,
+    feed = new NoteFeed(coordinator.storageEpoch, (query) => invoke<StorageResult<NotePage>>("list_suiji", {
+      expectedStorageEpoch: query.epoch, filter: query.filter, search: query.search, cursor: query.cursor, groupId: query.groupId ?? null, sort: query.sort, limit: 50,
     }));
     if (coordinator.paused) feed.pause();
     onStorageChanged((epoch) => feed?.switchEpoch(epoch));

@@ -10,6 +10,10 @@ import type { Note, NoteAction, NoteDraft, NoteFilter, NoteRef, StorageResult } 
 import "../../styles/notes.css";
 import NoteBodyEditor from "./NoteBodyEditor";
 import { useWindowVisible } from "../../lib/documentVisible";
+import { useRecordGroups } from "../../lib/useRecordGroups";
+import { organizeNote, pasteNote } from "../../lib/suiji";
+import { Icons } from "../../components/Icons";
+import RecordGroupSelect from "../PhrasePage/RecordGroupSelect";
 
 const label = (session: NoteSession, fallback: string) => session.draft.title || session.draft.body.slice(0, 160).split(/\r?\n/)[0] || session.draft.refs[0]?.display_name || fallback;
 function RecoveryRow({ coordinator, id }: { coordinator: NoteCoordinator; id: string }) {
@@ -61,17 +65,20 @@ function NotesList({ coordinator, feed }: { coordinator: NoteCoordinator; feed: 
     </div>
   </>;
 }
-function NoteEditor({ coordinator, id }: { coordinator: NoteCoordinator; id: string }) {
+export function NoteEditor({ coordinator, id, compact = false, expanded = false, onExpand }: { coordinator: NoteCoordinator; id: string; compact?: boolean; expanded?: boolean; onExpand?: () => void }) {
   const { t } = useTranslation();
   const session = useSyncExternalStore((listener) => coordinator.subscribe(id, listener), () => coordinator.getSession(id));
   const [link, setLink] = useState("");
   const [showLink, setShowLink] = useState(false);
   const [confirmation, setConfirmation] = useState<"discard" | "reload" | "delete" | null>(null);
   const [busy, setBusy] = useState(false);
+  const { groups } = useRecordGroups();
   const generation = useRef(0);
+  const focusTick = useNotesWorkspace(state => state.focusTick);
   useEffect(() => () => { generation.current++; }, []);
   if (!session) return <button onClick={() => useNotesWorkspace.getState().back()}>{t("notes.back")}</button>;
   const readOnly = session.summary?.deleted_at_ms !== null && session.summary?.deleted_at_ms !== undefined;
+  const quick = !expanded && !!onExpand;
   const run = async (operation: () => Promise<void>) => {
     if (busy) return;
     const current = generation.current, epoch = coordinator.storageEpoch; setBusy(true); useNotesWorkspace.getState().setError(null);
@@ -94,10 +101,17 @@ function NoteEditor({ coordinator, id }: { coordinator: NoteCoordinator; id: str
     if (result.storage_epoch !== coordinator.storageEpoch) throw { code: "notes.storageChanged" };
     await coordinator.discard(id); coordinator.load(result.value, result.storage_epoch); setConfirmation(null);
   });
+  const save = () => run(async () => { await coordinator.flush(id); if (compact) useNotesWorkspace.getState().back(); });
+  const saveStatus = <span className="notes-save-status" data-status={session.status} role="status"><i />{t(quick && session.status === "saved" ? "suiji.draftKept" : `notes.status.${session.status}`)}</span>;
+  const groupControl = !readOnly && <RecordGroupSelect groups={groups} value={session.summary?.group_id ?? null} disabled={busy || session.revision === null || session.composing}
+    title={session.revision === null ? t("suiji.groupAfterSave") : t("suiji.group")} onChange={groupId => { void run(() => organizeNote(id, { groupId })); }} />;
+  const saveButton = <button className="suiji-save" disabled={busy || session.composing} onClick={() => { void save(); }}>{t(compact ? "suiji.done" : "notes.save")}<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7" /></svg></button>;
   return <>
-    <div className="notes-toolbar"><button onClick={() => useNotesWorkspace.getState().back()}>{t("notes.back")}</button>
-      <span className="notes-save-status" role="status">{t(`notes.status.${session.status}`)}</span>
-      {!readOnly && <button disabled={busy || session.composing} onClick={() => { void run(() => coordinator.flush(id)); }}>{t("notes.save")}</button>}
+    <div className={`notes-toolbar suiji-editor-header${quick ? " is-quick" : ""}`}>
+      {quick ? <><svg className="suiji-pencil" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7l-4-4L4 15z" /></svg><span className="suiji-editor-heading">{t("suiji.quickHeading")}</span></> : <button className="suiji-back" onClick={() => useNotesWorkspace.getState().back()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5" /></svg>{t("notes.back")}</button>}
+      {!quick && saveStatus}
+      {onExpand && <button className="suiji-expand" title={t(expanded ? "suiji.collapse" : "suiji.expand")} aria-label={t(expanded ? "suiji.collapse" : "suiji.expand")} aria-pressed={expanded} onClick={onExpand}><span /></button>}
+      {quick && <button className="suiji-close" aria-label={t("suiji.closeComposer")} title={t("suiji.closeComposer")} onClick={() => useNotesWorkspace.getState().back()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>}
     </div>
     {session.error && <div className="notes-error" role="alert">{t(session.error.code, { defaultValue: t("notes.saveFailed") })}</div>}
     {session.status === "conflict" && <div className="notes-toolbar">
@@ -111,15 +125,19 @@ function NoteEditor({ coordinator, id }: { coordinator: NoteCoordinator; id: str
         else void run(async () => { await coordinator.discard(id); useNotesWorkspace.getState().back(); });
       }}>{t("notes.confirm")}</button><button onClick={() => setConfirmation(null)}>{t("notes.cancel")}</button>
     </div>}
-    <div className="notes-editor notes-scroll">
-      <input className="notes-title" aria-label={t("notes.title")} placeholder={t("notes.title")} value={session.draft.title} readOnly={readOnly} maxLength={256}
+    <div className={`notes-editor notes-scroll${quick ? " is-quick" : ""}`} onKeyDown={event => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && !session.composing && !readOnly) { event.preventDefault(); void save(); }
+    }}>
+      <input className="notes-title" aria-label={t("notes.title")} placeholder={t("suiji.titlePlaceholder")} value={session.draft.title} readOnly={readOnly} maxLength={256}
         onChange={(event) => edit({ title: event.target.value })} onCompositionStart={() => coordinator.setComposing(id, true)} onCompositionEnd={() => coordinator.setComposing(id, false)} />
-      <NoteBodyEditor label={t("notes.body")} value={session.draft.body} readOnly={readOnly}
+      {!quick && <div className="suiji-editor-tools">{groupControl}{!readOnly && session.revision !== null && <button className="suiji-editor-star" disabled={busy} aria-label={t(session.summary?.starred ? "suiji.unstar" : "suiji.star")} title={t(session.summary?.starred ? "suiji.unstar" : "suiji.star")} aria-pressed={!!session.summary?.starred} onClick={() => { void run(() => organizeNote(id, { starred: !session.summary?.starred })); }}><svg viewBox="0 0 24 24" fill={session.summary?.starred ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.6"><path d="m12 3 2.8 5.7 6.3.9-4.5 4.4 1.1 6.2-5.7-3-5.7 3 1.1-6.2L3.2 9.6l6.1-.9z" /></svg></button>}{session.summary && <time dateTime={new Date(session.summary.updated_at_ms).toISOString()}>{new Date(session.summary.updated_at_ms).toLocaleString()}</time>}</div>}
+      <NoteBodyEditor label={t("notes.body")} placeholderText={t("suiji.bodyPlaceholder")} value={session.draft.body} readOnly={readOnly}
+        focusTick={focusTick}
         onChange={(body) => edit({ body })} onComposing={(composing) => coordinator.setComposing(id, composing)}
         onBlur={() => { void coordinator.flush(id).catch(() => {}); }}
         onTooLarge={() => useNotesWorkspace.getState().setError({ code: "notes.bodyTooLarge" })} />
-      <p className="notes-hint">{t("notes.sizeHint")}</p>
-      {session.source && <p className="notes-hint">{t("notes.source", { app: session.source.source_app || session.source.kind })}</p>}
+      {!quick && <p className="notes-hint">{t("suiji.editorHint")}</p>}
+      {session.source && session.source.kind !== "phrase" && <p className="notes-hint">{t("notes.source", { app: session.source.source_app || session.source.kind })}</p>}
       <div className="notes-refs">{session.draft.refs.map((reference) => <div className="notes-reference" key={reference.id}>
         <strong title={reference.target}>{reference.display_name || reference.target}</strong>
         <div className="notes-toolbar"><button disabled={busy} onClick={() => { void run(async () => {
@@ -129,8 +147,8 @@ function NoteEditor({ coordinator, id }: { coordinator: NoteCoordinator; id: str
         <button onClick={() => { void run(async () => { await invokeStorage("copy_text", { text: reference.target }, coordinator.storageEpoch); }); }}>{t("notes.copyReference")}</button>
         {!readOnly && <button disabled={busy} onClick={() => edit({ refs: session.draft.refs.filter((ref) => ref.id !== reference.id) })}>{t("notes.removeReference")}</button>}</div>
       </div>)}</div>
-      {!readOnly && <div className="notes-toolbar"><button disabled={busy} onClick={() => { void addFiles(); }}>{t("notes.addFile")}</button>
-        <button onClick={() => setShowLink(!showLink)}>{t("notes.addLink")}</button></div>}
+      {!readOnly && !quick && <details className="suiji-editor-more"><summary>{t("suiji.moreActions")}</summary><div className="notes-toolbar"><button disabled={busy} onClick={() => { void addFiles(); }}>{t("notes.addFile")}</button>
+        <button onClick={() => setShowLink(!showLink)}>{t("notes.addLink")}</button>{!compact && saveButton}<button disabled={busy || !session.draft.body} onClick={() => { void run(async () => { await invokeStorage("copy_text", { text: session.draft.body }, coordinator.storageEpoch); }); }}>{t("notes.copyBody")}</button><button disabled={busy} onClick={() => setConfirmation("discard")}>{t("notes.discard")}</button></div></details>}
       {showLink && !readOnly && <form className="notes-toolbar" onSubmit={(event) => {
         event.preventDefault();
         try { const url = new URL(link); if (!/^https?:$/.test(url.protocol)) throw new Error(); }
@@ -139,12 +157,13 @@ function NoteEditor({ coordinator, id }: { coordinator: NoteCoordinator; id: str
         catch (error) { useNotesWorkspace.getState().setError(error); }
       }}><input aria-label={t("notes.linkAddress")} placeholder="https://" value={link} maxLength={32768} onChange={(event) => setLink(event.target.value)} /><button type="submit">{t("notes.addLink")}</button></form>}
     </div>
-    <div className="notes-toolbar notes-actions">
-      <button disabled={busy || !session.draft.body} onClick={() => { void run(async () => { await invokeStorage("copy_text", { text: session.draft.body }, coordinator.storageEpoch); }); }}>{t("notes.copyBody")}</button>
-      {session.revision !== null && (readOnly ? <button disabled={busy} onClick={() => { void state("restore"); }}>{t("notes.restore")}</button> : <>
+    <div className={`notes-toolbar notes-actions${quick ? " is-quick" : ""}`}>
+      {quick && <>{groupControl}{saveStatus}{!readOnly && saveButton}</>}
+      {!quick && readOnly && <button disabled={busy || !session.draft.body} onClick={() => { void run(async () => { await invokeStorage("copy_text", { text: session.draft.body }, coordinator.storageEpoch); }); }}>{t("notes.copyBody")}</button>}
+      {!quick && !compact && session.revision !== null && (readOnly ? <button disabled={busy} onClick={() => { void state("restore"); }}>{t("notes.restore")}</button> : <>
         <button disabled={busy} onClick={() => { void state(session.summary?.archived_at_ms ? "unarchive" : "archive"); }}>{t(session.summary?.archived_at_ms ? "notes.unarchive" : "notes.archive")}</button>
-        <button disabled={busy} onClick={() => setConfirmation("delete")}>{t("notes.delete")}</button></>)}
-      {!readOnly && <button disabled={busy} onClick={() => setConfirmation("discard")}>{t("notes.discard")}</button>}
+        <button className="suiji-delete" disabled={busy} onClick={() => setConfirmation("delete")}>{Icons.delete}{t("notes.delete")}</button></>)}
+      {!quick && <><small className="suiji-char-count">{t("suiji.charCount", { count: Array.from(session.draft.body).length })}</small>{!readOnly && (compact ? saveButton : <button className="suiji-save" disabled={busy || session.composing || (!session.draft.body && !session.draft.refs.length)} onClick={() => { void run(() => pasteNote(id, coordinator.storageEpoch)); }}>{t("suiji.pasteBody")}<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3H3v10h8v-3M6 6h7V2H6z" /></svg></button>)}</>}
     </div>
   </>;
 }

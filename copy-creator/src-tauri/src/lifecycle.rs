@@ -604,7 +604,13 @@ pub async fn lifecycle_saved(
                 #[cfg(target_os = "windows")]
                 {
                     let restart = app.clone();
-                    app.run_on_main_thread(move || restart.restart())
+                    app.run_on_main_thread(move || {
+                        // All saves, accepted workers and sensitive cleanup are
+                        // complete. Tauri spawns its successor before exiting,
+                        // so release this process's instance lock at this point.
+                        restart.state::<crate::single_instance::Instance>().release_for_restart();
+                        restart.restart()
+                    })
                         .map_err(|_| "lifecycle.failed".to_string())
                 }
                 #[cfg(not(target_os = "windows"))]

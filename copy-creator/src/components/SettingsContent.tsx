@@ -25,7 +25,7 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
   const values = editor.values;
   const [storageStats, setStorageStats] = useState<ClipboardStorageStats | null>(null);
   const [storagePath, setStoragePath] = useState("");
-  const [recording, setRecording] = useState(false);
+  const [recording, setRecording] = useState<"shortcut_key" | "note_shortcut_key" | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const categoryBodyRef = useRef<HTMLFieldSetElement>(null);
   const keydownHandlerRef = useRef<((event: KeyboardEvent) => void) | null>(null);
@@ -55,12 +55,12 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
   }, [settings.maxHistoryItems, settings.maxStorageMb]);
 
   const stopRecording = () => {
-    setRecording(false);
+    setRecording(null);
     if (keydownHandlerRef.current) document.removeEventListener("keydown", keydownHandlerRef.current, true);
     keydownHandlerRef.current = null;
   };
-  const startRecording = () => {
-    stopRecording(); setRecording(true);
+  const startRecording = (field: "shortcut_key" | "note_shortcut_key") => {
+    stopRecording(); setRecording(field);
     const handler = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); stopRecording(); return; }
       if (["Control", "Alt", "Shift", "Meta", "CapsLock", "NumLock", "ScrollLock", "Dead"].includes(event.key)
@@ -74,7 +74,7 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
       const key = event.code.startsWith("Key") ? event.code[3] : event.code.startsWith("Digit") ? event.code[5]
         : event.code.startsWith("Numpad") ? `NumPad${event.code.substring(6)}` : event.key === " " ? "Space" : event.key;
       parts.push(key); stopRecording();
-      useSettingsEditorStore.getState().change("shortcut_key", parts.join("+"));
+      useSettingsEditorStore.getState().change(field, parts.join("+"));
     };
     keydownHandlerRef.current = handler;
     document.addEventListener("keydown", handler, true);
@@ -91,6 +91,7 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
     if (previousShortcut !== imported.shortcutKey) await invoke("update_shortcut", {
       oldShortcut: previousShortcut, newShortcut: imported.shortcutKey,
     }).catch(console.error);
+    await invokeStorage("save_note_shortcut", { newShortcut: imported.noteShortcutKey }).catch(console.error);
     await invokeStorage("set_radial_menu_enabled", { enabled: imported.radialMenuEnabled }).catch(console.error);
     if (imported.language !== i18n.language) {
       await i18n.changeLanguage(imported.language);
@@ -108,6 +109,7 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
       <ShortcutSection localShortcutKey={settings.shortcutKey} setLocalShortcutKey={change("shortcut_key")}
         error={editor.errors.shortcut_key}
         recording={recording} startRecording={startRecording} stopRecording={stopRecording}
+        noteShortcutKey={settings.noteShortcutKey} noteError={editor.errors.note_shortcut_key} clearNoteShortcut={() => editor.change("note_shortcut_key", "")}
         localRadialMenuEnabled={values.radial_menu_enabled === "1"} setLocalRadialMenuEnabled={toggle("radial_menu_enabled")} />
     </>,
     clipboard: <>

@@ -1,5 +1,5 @@
 import "../../styles/vault.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { Icons } from "../../components/Icons";
 import SearchInput from "../../components/SearchInput";
@@ -34,15 +34,17 @@ function UnlockedVault() {
       {error === "vault.pasteRequiresElevation" && <RestartAsAdminButton />}
     </div>}
     {notice && <p className="vault-feedback" role="status">{t(notice)}</p>}
+    <div className="vault-view" key={mode}>
     {mode === "master" ? <ChangeMaster onBack={back} /> : mode === "generator" ? <><button type="button" className="vault-text-button" onClick={back}>← {t("vault.back")}</button><section className="vault-section"><PasswordGenerator /></section></> : mode === "new" || (mode === "edit" && selected) ? <EntryEditor key={selected?.id || "new"} initial={mode === "edit" && selected ? selected : emptyVaultEntry()} onCancel={mode === "edit" ? () => setMode("detail") : back} onSaved={() => setMode("detail")} /> : mode === "detail" && selected ? <EntryDetail entry={selected} onBack={back} onEdit={() => setMode("edit")} /> : <>
-      <div className="vault-list-heading"><div><span className="vault-eyebrow">{t("vault.eyebrow")}</span><h2>{t("vault.yourWebsites")}</h2><p className="vault-caption">{t("vault.multipleAccounts")}</p></div><button className="vault-button primary" type="button" onClick={() => { clearSelected(); setMode("new"); }}>{Icons.add}{t("vault.newEntry")}</button></div>
-      <SearchInput placeholder={t("vault.searchPlaceholder")} value={search} onChange={setSearch} />
+      <div className="vault-list-heading"><div><h2>{t("vault.yourWebsites")}</h2><p className="vault-caption">{t("vault.multipleAccounts")}</p></div></div>
+      <div className="vault-search-row"><SearchInput placeholder={t("vault.searchPlaceholder")} value={search} onChange={setSearch} /><button className="vault-button primary vault-create" type="button" title={t("vault.newEntry")} aria-label={t("vault.newEntry")} onClick={() => { clearSelected(); setMode("new"); }}>{Icons.add}</button></div>
       <div className="vault-list-meta"><span>{t("vault.entryCount", { count: entries.length })}</span><button type="button" className="vault-text-button" onClick={() => setMode("generator")}>{Icons.key}{t("vault.generator")}</button></div>
-      {entries.length === 0 ? <div className="vault-empty"><div className="vault-empty-icon">{Icons.vault}</div><h3>{t(search ? "vault.noResults" : "vault.emptyTitle")}</h3><p>{t(search ? "vault.noResultsHint" : "vault.emptyHint")}</p>{search && <button type="button" className="vault-text-button" onClick={() => setSearch("")}>{t("vault.clearSearch")}</button>}</div> : <div className="vault-list">{entries.map((entry) => <button type="button" className="vault-site-card" key={entry.id} disabled={busy} onClick={async () => { if (await openEntry(entry.id)) setMode("detail"); }}>
+      {entries.length === 0 ? <div className="vault-empty"><div className="vault-empty-icon">{Icons.vault}</div><h3>{t(search ? "vault.noResults" : "vault.emptyTitle")}</h3><p>{t(search ? "vault.noResultsHint" : "vault.emptyHint")}</p>{search && <button type="button" className="vault-text-button" onClick={() => setSearch("")}>{t("vault.clearSearch")}</button>}</div> : <div className="vault-list">{entries.map((entry, index) => <button type="button" className="vault-site-card" style={{ "--enter-delay": Math.min(index, 5) } as CSSProperties} key={entry.id} disabled={busy} onClick={async () => { if (await openEntry(entry.id)) setMode("detail"); }}>
         <span className="vault-site-avatar">{entry.title.slice(0, 1).toUpperCase()}</span><span className="vault-site-card-body"><span className="vault-site-title">{entry.title}</span><span className="vault-site-domain">{domain(entry.website) || t("vault.noWebsite")}</span><span className="vault-site-account">{entry.username || entry.email || t("vault.noAccountInfo")}</span>{entry.tags.length > 0 && <span className="vault-tags">{entry.tags.slice(0, 3).map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</span>}</span><span className="vault-site-card-end">{entry.has_password && Icons.key}<span>›</span></span>
       </button>)}</div>}
       <p className="vault-list-footnote">{t("vault.clipboardHint")}</p>
     </>}
+    </div>
   </>;
 }
 

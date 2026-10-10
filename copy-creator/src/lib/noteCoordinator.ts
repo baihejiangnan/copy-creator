@@ -81,7 +81,7 @@ function summaryOf(note: Note): NoteSummary {
   return { id: note.id, title: note.title, summary: note.summary, char_count: note.char_count,
     byte_count: note.byte_count, created_at_ms: note.created_at_ms, updated_at_ms: note.updated_at_ms,
     revision: note.revision, archived_at_ms: note.archived_at_ms, deleted_at_ms: note.deleted_at_ms,
-    ref_count: note.ref_count };
+    ref_count: note.ref_count, group_id: note.group_id, starred: note.starred };
 }
 function notify(listeners?: Set<() => void>) {
   listeners?.forEach((listener) => {
@@ -120,6 +120,7 @@ export class NoteCoordinator {
     this.uuid = uuid; this.onCommit = onCommit;
   }
   get storageEpoch() { return this.epoch; }
+  get activeNoteId() { return this.activeId; }
   get dirtyCount() { return [...this.sessions.values()].filter(isDirty).length; }
   get paused() { return this.frozen; }
   get hasPending() { return [...this.sessions.values()].some(needsRecovery) || this.flights.size > 0 || this.requests.size > 0; }

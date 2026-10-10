@@ -16,6 +16,7 @@ const FORMAT: &str = "copy-creator-encrypted-backup";
 const KDF: &str = "argon2id-v19-m65536-t3-p1";
 const CIPHER: &str = "aes-256-gcm";
 const AAD: &[u8] = b"copy-creator/user-backup/v2/argon2id-v19-m65536-t3-p1/aes-256-gcm";
+const AAD_V4: &[u8] = b"copy-creator/user-backup/v4/argon2id-v19-m65536-t3-p1/aes-256-gcm";
 const AAD_V3: &[u8] = b"copy-creator/user-backup/v3/argon2id-v19-m65536-t3-p1/aes-256-gcm";
 const MAX_FILE: usize = 100 * 1024 * 1024;
 const MAX_PAYLOAD: usize = 74 * 1024 * 1024;
@@ -69,6 +70,8 @@ struct BackupBundle {
     vault: Option<vault::VaultBackup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     notes: Vec<note_backup::BackupNote>,
+    #[serde(default, skip_serializing_if="Vec::is_empty")]
+    note_groups: Vec<crate::suiji::NoteGroup>,
 }
 
 fn default_favorite() -> bool {
@@ -138,7 +141,7 @@ impl Drop for BackupBundle {
 fn file_is_encrypted(bytes: &[u8]) -> Result<bool, String> {
     let header: Header = serde_json::from_slice(bytes).map_err(|_| "backup.invalidFile")?;
     match header.format.as_deref() {
-        Some(FORMAT) if matches!(header.version, 2 | 3) => Ok(true),
+        Some(FORMAT) if matches!(header.version, 2 | 3 | 4) => Ok(true),
         None if matches!(header.version, 0 | 1) => Ok(false),
         _ => Err("backup.unsupportedVersion".into()),
     }
@@ -154,14 +157,14 @@ fn validate_backup_password(password: &str) -> Result<(), String> {
 #[cfg(test)]
 fn encode_bundle(bundle: &BackupBundle, password: &str) -> Result<Zeroizing<Vec<u8>>, String> {
     validate_backup_password(password)?;
-    if bundle.version != 3 && !(bundle.version == 2 && bundle.notes.is_empty()) { return Err("backup.unsupportedVersion".into()); }
+    if !matches!(bundle.version,3|4) && !(bundle.version == 2 && bundle.notes.is_empty()) { return Err("backup.unsupportedVersion".into()); }
     let plaintext = backup_limits::encode_json(bundle, MAX_PAYLOAD, false)?;
     encode_plaintext(bundle.version, plaintext, password)
 }
 
 fn encode_bundle_owned(bundle: BackupBundle, password: &str) -> Result<Zeroizing<Vec<u8>>, String> {
     validate_backup_password(password)?;
-    if bundle.version != 3 && !(bundle.version == 2 && bundle.notes.is_empty()) { return Err("backup.unsupportedVersion".into()); }
+    if !matches!(bundle.version,3|4) && !(bundle.version == 2 && bundle.notes.is_empty()) { return Err("backup.unsupportedVersion".into()); }
     let version = bundle.version;
     let plaintext = backup_limits::encode_json(&bundle, MAX_PAYLOAD, false)?;
     // Release bodies/images before KDF, base64 and outer JSON allocations.
@@ -170,7 +173,7 @@ fn encode_bundle_owned(bundle: BackupBundle, password: &str) -> Result<Zeroizing
 }
 
 fn encode_plaintext(version: u32, plaintext: Zeroizing<Vec<u8>>, password: &str) -> Result<Zeroizing<Vec<u8>>, String> {
-    let aad = if version == 3 { AAD_V3 } else { AAD };
+    let aad = if version == 4 { AAD_V4 } else if version == 3 { AAD_V3 } else { AAD };
     let salt = crypto::random_bytes::<16>()?;
     let key = crypto::derive_key(password, &salt)?;
     let envelope = EncryptedBackup {
@@ -209,7 +212,7 @@ fn decode_bundle(bytes: &[u8], password: &str) -> Result<(BackupBundle, bool), S
             return Err("backup.invalidFile".into());
         }
         let key = crypto::derive_key(password, &salt)?;
-        let aad = if envelope.version == 3 { AAD_V3 } else { AAD };
+        let aad = if envelope.version == 4 { AAD_V4 } else if envelope.version == 3 { AAD_V3 } else { AAD };
         let plaintext = crypto::decrypt_bound(&key, aad, &envelope.payload)
             .map_err(|_| "backup.wrongPassword")?;
         if plaintext.len() > MAX_PAYLOAD {
@@ -251,6 +254,8 @@ fn record_is_key(record: &BackupRecord) -> bool {
 }
 
 fn validate_bundle(bundle: &BackupBundle) -> Result<(), String> {
+    crate::suiji::validate_groups(&bundle.note_groups)?;
+    if bundle.version < 4 && (!bundle.note_groups.is_empty() || bundle.notes.iter().any(|note|note.group_id.is_some() || note.starred)) { return Err("backup.unsupportedVersion".into()); }
     note_backup::validate(&bundle.notes)?;
     if bundle.settings.len() > 200 || bundle.favorites.len() > 100_000 {
         return Err("backup.invalidFile".into());
@@ -305,16 +310,19 @@ fn export_snapshot(conn: &Connection) -> Result<BackupBundle, String> {
     preflight_snapshot(conn)?;
     let mut budget = backup_limits::Budget::new(MAX_PAYLOAD);
     let mut bundle = BackupBundle {
-        version: 3,
+        version: 4,
         exported_at: chrono::Utc::now().to_rfc3339(),
         settings: HashMap::new(),
         favorites: Vec::new(),
         vault: None,
         notes: Vec::new(),
+        note_groups: Vec::new(),
     };
     budget.include(&bundle)?;
     bundle.vault = vault::snapshot_backup(conn)?;
     if let Some(vault) = &bundle.vault { budget.include(vault)?; }
+    bundle.note_groups=crate::suiji::groups(conn).map_err(|_|"backup.databaseFailed")?;
+    for group in &bundle.note_groups {budget.include(group)?;}
     bundle.notes = note_backup::snapshot(conn,&mut budget)?;
     let mut stmt = conn
         .prepare("SELECT key, value FROM settings")
@@ -404,7 +412,7 @@ fn preflight_snapshot(conn: &Connection) -> Result<(), String> {
         bytes=bytes.saturating_add(size as u64);
         if bytes>MAX_PAYLOAD as u64 {return Err("backup.fileTooLarge".into());}
     }
-    let invalid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM notes WHERE deleted_at_ms IS NULL AND (length(CAST(body AS BLOB))>262144 OR length(title)>128))",[],|r|r.get(0)).map_err(|_| "backup.databaseFailed")?;
+    let invalid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM notes WHERE deleted_at_ms IS NULL AND (length(CAST(body AS BLOB))>262144 OR length(title)>128) AND COALESCE(json_extract(source_json,'$.kind'),'')<>'phrase')",[],|r|r.get(0)).map_err(|_| "backup.databaseFailed")?;
     if invalid {return Err("backup.invalidFile".into());}
     let invalid_records:bool=conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM clipboard_records r LEFT JOIN api_key_labels l ON l.record_id=r.id WHERE ({predicate}) AND (length(CAST(r.content AS BLOB))>16777216 OR length(CAST(r.source_app AS BLOB))>4096 OR length(r.favorite_note)>{} OR length(l.service)>80 OR length(l.note)>100 OR length(CAST(l.api_base AS BLOB))>2048))",db::FAVORITE_NOTE_MAX_CHARS),[],|r|r.get(0)).map_err(|_| "backup.databaseFailed")?;
     let invalid_refs:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM note_refs WHERE note_id IN(SELECT id FROM notes WHERE deleted_at_ms IS NULL) AND (length(CAST(target AS BLOB))>32768 OR length(display_name)>512))",[],|r|r.get(0)).map_err(|_| "backup.databaseFailed")?;
@@ -832,6 +840,7 @@ fn apply_bundle_full(
         }
     }
     let result = vault::apply_backup_import(&tx, plan)?;
+    crate::suiji::restore_groups(&tx,&bundle.note_groups)?;
     let notes=note_backup::apply(&tx,&bundle.notes)?;
     tx.commit().map_err(|_| "backup.databaseFailed")?;
     Ok((result.0,result.1,notes))
@@ -916,14 +925,29 @@ mod tests {
     fn note_fixture() -> note_backup::BackupNote {
         note_backup::BackupNote {id:uuid::Uuid::new_v4().to_string(),title:"便签".into(),body:"  完整正文\n第二行  ".into(),refs:vec![crate::notes::NoteRef {
             id:uuid::Uuid::new_v4().to_string(),kind:"file".into(),target:"C:\\external\\keep.txt".into(),display_name:"keep".into()}],
-            source:Some(crate::notes::NoteSource {kind:"text".into(),record_id:uuid::Uuid::new_v4().to_string(),source_app:"fixture".into(),captured_at_ms:2}),created_at_ms:1,updated_at_ms:2,archived_at_ms:Some(3)}
+            source:Some(crate::notes::NoteSource {kind:"text".into(),record_id:uuid::Uuid::new_v4().to_string(),source_app:"fixture".into(),captured_at_ms:2}),created_at_ms:1,updated_at_ms:2,archived_at_ms:Some(3),group_id:None,starred:false}
     }
     #[test]
-    fn v3_backup_round_trips_notes_and_excludes_trash_with_separate_authenticated_version() {
+    fn encrypted_v3_remains_readable_and_v4_preserves_organization() {
+        let mut source=connection(); let mut note=note_fixture();
+        let group=crate::suiji::NoteGroup{id:uuid::Uuid::new_v4().to_string(),name:"group".into(),color:"#aabbcc".into(),sort_order:2,count:0};
+        {let tx=source.transaction().unwrap();crate::suiji::restore_groups(&tx,&[group.clone()]).unwrap();note.group_id=Some(group.id.clone());note.starred=true;note_backup::apply(&tx,&[note.clone()]).unwrap();tx.commit().unwrap();}
+        let bytes=encode_bundle_owned(export_snapshot(&source).unwrap(),BACKUP_PASSWORD).unwrap();
+        let (bundle,_)=decode_bundle(&bytes,BACKUP_PASSWORD).unwrap();
+        assert_eq!(bundle.version,4); assert_eq!(bundle.note_groups[0].name,group.name);assert!(bundle.notes[0].starred);
+        let mut destination=connection();let import_plan=plan(&destination,None,"","").unwrap();
+        apply_bundle(&mut destination,&bundle,&HashMap::new(),&import_plan).unwrap();
+        let restored=crate::notes::read_note(&destination,&note.id).unwrap();assert_eq!(restored.summary.group_id,note.group_id);assert!(restored.summary.starred);
+        let mut old=export_snapshot(&connection()).unwrap();old.version=3;note.group_id=None;note.starred=false;old.notes.push(note);
+        let bytes=encode_bundle(&old,BACKUP_PASSWORD).unwrap();let (restored,_)=decode_bundle(&bytes,BACKUP_PASSWORD).unwrap();
+        assert_eq!(restored.version,3);assert!(!restored.notes[0].starred);assert!(restored.notes[0].group_id.is_none());
+    }
+    #[test]
+    fn v4_backup_round_trips_notes_and_excludes_trash_with_separate_authenticated_version() {
         let mut source=connection(); let note=note_fixture(); let mut trash=note_fixture(); trash.title="trash".into();
         {let tx=source.transaction().unwrap();note_backup::apply(&tx,&[note.clone(),trash.clone()]).unwrap();tx.commit().unwrap();}
         source.execute("UPDATE notes SET deleted_at_ms=4 WHERE id=?1",[&trash.id]).unwrap();
-        let snapshot=export_snapshot(&source).unwrap(); assert_eq!(snapshot.version,3); assert_eq!(snapshot.notes.len(),1);
+        let snapshot=export_snapshot(&source).unwrap(); assert_eq!(snapshot.version,4); assert_eq!(snapshot.notes.len(),1);
         let bytes=encode_bundle_owned(snapshot,BACKUP_PASSWORD).unwrap(); let (restored,_)=decode_bundle(&bytes,BACKUP_PASSWORD).unwrap();
         assert_eq!(restored.notes[0].body,note.body); assert_eq!(restored.notes[0].source,note.source);
         let mut envelope:EncryptedBackup=serde_json::from_slice(&bytes).unwrap(); envelope.version=2;
@@ -1035,6 +1059,7 @@ mod tests {
             note TEXT DEFAULT '', is_expired INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
             CREATE TABLE api_services (name TEXT PRIMARY KEY, api_base TEXT NOT NULL DEFAULT '');
             INSERT INTO settings VALUES ('theme', 'light');").unwrap();
+        conn.execute_batch("CREATE TABLE phrase_groups(id TEXT PRIMARY KEY,name TEXT NOT NULL,sort_order INTEGER,created_at TEXT,updated_at TEXT);").unwrap();
         vault::init_schema(&conn).unwrap();
         crate::notes::init_schema(&conn).unwrap();
         note_backup::init_schema(&conn).unwrap();

@@ -3,7 +3,8 @@
 $ErrorActionPreference='Stop'
 $script:qaProcessRoots=@(
  [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../output/optimization/QA-notes-20261007')),
- [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../output/optimization/baseline-runtime-20261008'))
+ [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../output/optimization/baseline-runtime-20261008')),
+ [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../copy-creator/src-tauri/target/debug'))
 )
 function Get-LimitedProcessImage {
  param([uint32]$ProcessId)

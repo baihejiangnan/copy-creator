@@ -1,4 +1,4 @@
-//! Recoverable settings/vault/notes relocation. Clipboard/phrase history and
+//! Recoverable settings/vault/records/groups relocation. Clipboard history and
 //! app-owned image assets retain the existing storage-change scope.
 use rusqlite::{
     params, params_from_iter,
@@ -45,6 +45,9 @@ fn digest(conn: &Connection) -> Result<String, String> {
         "SELECT id,version,salt,verifier FROM vault_config ORDER BY id".into(),
         "SELECT id,encrypted_data,created_at,updated_at FROM vault_entries ORDER BY id".into(),
         "SELECT source_id,content_hash,restored_note_id FROM note_import_origins ORDER BY source_id,content_hash".into(),
+        "SELECT note_id,group_id,starred FROM note_organization ORDER BY note_id".into(),
+        "SELECT id,name,sort_order,created_at,updated_at FROM phrase_groups ORDER BY id".into(),
+        "SELECT id,color FROM note_group_colors ORDER BY id".into(),
     ];
     for query in queries {
         hash.update((query.len() as u64).to_le_bytes());
@@ -139,7 +142,7 @@ pub(crate) fn prepare_target(
         })
         .transpose()?;
     let original_settings = if let Some(receipt) = &previous {
-        if receipt.version != 1
+        if receipt.version != 2
             || receipt.source != source_path
             || receipt.destination != destination_path
             || digest(&tx)? != receipt.digest
@@ -151,14 +154,15 @@ pub(crate) fn prepare_target(
         let has_notes: bool = tx
             .query_row("SELECT EXISTS(SELECT 1 FROM notes)", [], |r| r.get(0))
             .map_err(db_error)?;
-        if has_notes {
+        let has_groups: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM phrase_groups)", [], |r|r.get(0)).map_err(db_error)?;
+        if has_notes || has_groups {
             return Err("notes.storageConflict".into());
         }
         crate::vault::ensure_empty_storage(&tx)?;
         settings(&tx)?
     };
     if previous.is_some() {
-        tx.execute_batch("DELETE FROM note_refs; DELETE FROM notes; DELETE FROM vault_entries; DELETE FROM vault_config; DELETE FROM settings;").map_err(db_error)?;
+        tx.execute_batch("DELETE FROM note_organization; DELETE FROM note_refs; DELETE FROM notes; DELETE FROM note_group_colors; DELETE FROM phrase_groups; DELETE FROM vault_entries; DELETE FROM vault_config; DELETE FROM settings;").map_err(db_error)?;
         for (key, value) in &original_settings {
             tx.execute(
                 "INSERT INTO settings(key,value) VALUES(?1,?2)",
@@ -175,10 +179,13 @@ pub(crate) fn prepare_target(
     let cutoff = now.saturating_sub(RETENTION_MS);
     copy_rows(source, &tx, "notes", NOTE_COLUMNS, &format!("SELECT {NOTE_COLUMNS} FROM notes WHERE deleted_at_ms IS NULL OR deleted_at_ms>=?1 ORDER BY id"), cutoff)?;
     copy_rows(source, &tx, "note_refs", REF_COLUMNS, &format!("SELECT {REF_COLUMNS} FROM note_refs WHERE note_id IN (SELECT id FROM notes WHERE deleted_at_ms IS NULL OR deleted_at_ms>=?1) ORDER BY note_id,sort_order,id"), cutoff)?;
+    copy_rows(source, &tx, "phrase_groups", "id,name,sort_order,created_at,updated_at", "SELECT id,name,sort_order,created_at,updated_at FROM phrase_groups WHERE ?1 IS NOT NULL ORDER BY id", cutoff)?;
+    copy_rows(source, &tx, "note_group_colors", "id,color", "SELECT id,color FROM note_group_colors WHERE ?1 IS NOT NULL ORDER BY id", cutoff)?;
+    copy_rows(source, &tx, "note_organization", "note_id,group_id,starred", "SELECT note_id,group_id,starred FROM note_organization WHERE note_id IN(SELECT id FROM notes WHERE deleted_at_ms IS NULL OR deleted_at_ms>=?1) ORDER BY note_id", cutoff)?;
     copy_rows(source, &tx, "note_import_origins", "source_id,content_hash,restored_note_id",
         "SELECT source_id,content_hash,restored_note_id FROM note_import_origins WHERE restored_note_id IN (SELECT id FROM notes WHERE deleted_at_ms IS NULL OR deleted_at_ms>=?1) ORDER BY source_id,content_hash",cutoff)?;
     let receipt = Receipt {
-        version: 1,
+        version: 2,
         source: source_path.into(),
         destination: destination_path.into(),
         digest: digest(&tx)?,
@@ -218,6 +225,7 @@ mod tests {
         let mut target = connection();
         let now = RETENTION_MS * 2;
         note(&source, "active", None, None);
+        source.execute_batch("INSERT INTO phrase_groups VALUES('group','keep',4,'now','now');INSERT INTO note_group_colors VALUES('group','#aabbcc');INSERT INTO note_organization VALUES('active','group',1);").unwrap();
         note(&source, "archive", Some(2), None);
         note(&source, "trash", None, Some(now - 1));
         note(&source, "expired", None, Some(1));
@@ -229,6 +237,9 @@ mod tests {
             .unwrap();
         prepare_target(&source, &mut target, "source", "target", now).unwrap();
         assert_eq!(count(&target, "notes"), 3);
+        assert_eq!(count(&target,"phrase_groups"),1);
+        assert_eq!(target.query_row("SELECT group_id,starred FROM note_organization WHERE note_id='active'",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).unwrap(),("group".into(),1));
+        assert_eq!(target.query_row("SELECT color FROM note_group_colors WHERE id='group'",[],|r|r.get::<_,String>(0)).unwrap(),"#aabbcc");
         assert_eq!(count(&target, "note_refs"), 3);
         assert_eq!(count(&source, "notes"), 4);
         let tuple: (i64, String, String) = target

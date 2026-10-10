@@ -34,6 +34,8 @@
 
 .search-input-field {
   flex: 1;
+  min-width: 0;
+  width: 0;
   height: 100%;
   border: none;
   outline: none;
@@ -702,4 +704,21 @@
   color: #fff;
   border-color: rgba(255, 255, 255, 0.25);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+/* Shared dropdowns: same surface and keyboard treatment as context menus. */
+.app-select-trigger { display:inline-flex; align-items:center; gap:6px; min-width:0; border:1px solid var(--separator); border-radius:8px; padding:7px 9px; background:var(--chip-bg); color:var(--text-primary); font:inherit; font-size:12px; cursor:pointer; outline:0; transition:background .16s ease,border-color .16s ease,box-shadow .16s ease; }
+.app-select-trigger:hover:not(:disabled), .app-select-trigger[aria-expanded=true] { background:var(--chip-hover-bg); }
+.app-select-trigger:focus-visible { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 16%,transparent); }
+.app-select-trigger .ctx-menu-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.app-select-label { display:block; min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
+.app-select-chevron, .app-select-check { flex-shrink:0; width:12px; height:12px; fill:none; stroke:var(--text-secondary); stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+.app-select-chevron { transition:transform .24s cubic-bezier(.22,1,.36,1); }
+.app-select-trigger[aria-expanded=true] .app-select-chevron { transform:rotate(180deg); }
+.app-select-menu { width:232px; min-width:0; max-height:240px; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--text-secondary) 36%,transparent) transparent; font-family:var(--font); }
+.app-select-menu .ctx-menu-item { flex-shrink:0; font-size:12px; }
+.app-select-menu .ctx-menu-item[aria-checked=true] { background:var(--chip-bg); }
+.app-select-menu .ctx-menu-item:focus-visible { outline:0; background:var(--chip-hover-bg); }
+@media (prefers-reduced-motion:reduce) {
+  .app-select-trigger, .app-select-chevron, .app-select-menu, .app-select-menu * { animation:none !important; transition:none !important; }
 }

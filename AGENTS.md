@@ -33,6 +33,7 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | [copy-creator/src/stores/](copy-creator/src/stores/)、[lib/](copy-creator/src/lib/) | 状态、保存协调器、请求调度及存储身份等逻辑 |
 | [copy-creator/src/styles/](copy-creator/src/styles/)、[i18n/](copy-creator/src/i18n/) | 样式、主题和中英文文案 |
 | [copy-creator/src-tauri/src/lib.rs](copy-creator/src-tauri/src/lib.rs) | 原生启动、模块接入和 command 注册 |
+| [copy-creator/src-tauri/src/single_instance.rs](copy-creator/src-tauri/src/single_instance.rs) | Windows 启动前单实例门闸、重复启动唤起和原生重启锁交接 |
 | [copy-creator/src-tauri/src/db.rs](copy-creator/src-tauri/src/db.rs) | SQLite、连接初始化和版本迁移 |
 | [copy-creator/src-tauri/src/clipboard.rs](copy-creator/src-tauri/src/clipboard.rs)、[clipboard_wake.rs](copy-creator/src-tauri/src/clipboard_wake.rs)、[paste.rs](copy-creator/src-tauri/src/paste.rs) | 剪贴板采集、Windows 有界事件唤醒与原生复制/粘贴保护 |
 | [copy-creator/src-tauri/src/maintenance.rs](copy-creator/src-tauri/src/maintenance.rs)、[db_metrics.rs](copy-creator/src-tauri/src/db_metrics.rs) | 周期清理、暂停重试及可选数值诊断 |
@@ -57,10 +58,11 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | 资源体积、双窗口图片、查询/数据库热点、分包和性能测量 | [性能与体积优化方案](docs/features/performance-design.md) |
 | 备份格式、容量边界、兼容、导入事务和恢复规则 | [加密备份与恢复](docs/features/encrypted-backup.md) |
 | 密码箱、主密码、权限、复制/填入与资料保护 | [网站资料功能说明](docs/features/website-vault.md) |
-| 更新检查、启动行为和发布页下载流程 | [更新说明](docs/features/updates.md) |
+| 更新检查、启动行为、MSI 升级及两个入口/安装后启动验收 | [更新说明](docs/features/updates.md) |
 | 推送规则：提交、远端更新、版本号、便携构建和 GitHub Release 发布 | [推送规则（含构建与 Release 发布）](docs/features/release-rules.md) |
 | 已执行检查的环境、结果和剩余验证边界 | [验证记录](docs/verification/)；优先读取 TODO 相关条目链接的记录 |
-| 阶段变化与历史问题背景 | [开发日志](docs/project_process.md)、[问题与解决方案](docs/problems_and_solutions.md) |
+| 代码评审发现的缺陷、风险、死代码与建议修复顺序 | [代码修复清单](docs/reviews/2026-10-10-code-fix-list.md)；修复前先按清单核对行号是否仍有效 |
+| 阶段变化、历史问题背景和 Windows 发行故障恢复 | [开发日志](docs/project_process.md)、[问题与解决方案](docs/problems_and_solutions.md) |
 | 用户使用、安装及基础开发步骤 | [中文 README](README.md)、[English README](README_EN.md)、[应用 README](copy-creator/README.md) |
 
 涉及多个主题时读取相应文档。例如修改目录切换，应同时检查架构、便签设计、备份与密码箱合同；修改发布体积，应读取优化方案并核对实际构建配置与资源。

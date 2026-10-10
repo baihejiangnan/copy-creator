@@ -4,6 +4,8 @@ mod secrets;
 mod db;
 mod paste;
 mod shortcut;
+#[cfg(target_os = "windows")]
+mod single_instance;
 mod translator;
 mod tray;
 mod vault;
@@ -13,6 +15,7 @@ mod updates;
 mod update_package;
 mod update_signature;
 mod notes;
+mod suiji;
 mod lifecycle;
 mod storage;
 mod storage_events;
@@ -217,6 +220,19 @@ pub fn run() {
         return;
     }
     let context = tauri::generate_context!();
+    // Before any WebView, storage, tray, shortcut or clipboard producer exists.
+    #[cfg(target_os = "windows")]
+    let instance = match single_instance::Instance::acquire(
+        &context.config().identifier,
+        !std::env::args_os().skip(1).any(|arg| arg == "--hidden"),
+    ) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            log::error!("single instance initialization failed: {error}");
+            return;
+        }
+    };
     let autostart_name = autostart_entry_name(
         &context.package_info().name,
         &context.config().identifier,
@@ -231,15 +247,19 @@ pub fn run() {
             .build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut_key, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        shortcut::toggle_window(app);
+                        shortcut::handle_shortcut(app,shortcut_key);
                     }
                 })
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            {
+                app.manage(instance);
+            }
             if cfg!(feature = "diagnostics") {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -336,6 +356,8 @@ pub fn run() {
                 }
             }
 
+            shortcut::initialize_note_shortcut(app.handle());
+
             // Show main window when not auto-started (after all init is done)
             if !is_autostart {
                 if let Some(window) = app.get_webview_window("main") {
@@ -344,6 +366,8 @@ pub fn run() {
             }
 
             vault::start_lock_worker(app.handle())?;
+            #[cfg(target_os = "windows")]
+            app.state::<single_instance::Instance>().listen(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -358,6 +382,10 @@ pub fn run() {
             db::change_storage_directory,
             db::get_storage_epoch,
             notes::list_notes,
+            notes::list_suiji,
+            notes::organize_note,
+            suiji::get_suiji_groups,
+            suiji::save_suiji_group,
             notes::get_note,
             notes::create_note,
             notes::save_note,
@@ -410,6 +438,10 @@ pub fn run() {
             db::set_setting,
             db::save_clipboard_limit,
             shortcut::save_shortcut,
+            shortcut::save_note_shortcut,
+            shortcut::pending_note_request,
+            shortcut::ack_note_request,
+            shortcut::note_shortcut_status,
             db::set_settings_batch,
             backup::export_user_data,
             backup::select_user_data_import,

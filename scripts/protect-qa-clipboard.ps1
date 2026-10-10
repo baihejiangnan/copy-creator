@@ -1,12 +1,15 @@
-param([Parameter(Mandatory=$true)][string]$Metadata,[ValidateSet('default','baseline')][string]$Scope='default')
+param([Parameter(Mandatory=$true)][string]$Metadata,[ValidateSet('default','baseline','suiji')][string]$Scope='default',[switch]$Detached)
 $ErrorActionPreference='Stop'
 $qaRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../output/optimization/QA-notes-20261007'))
 $expectedIdentifier='com.copycreator.qa20261007'
 if($Scope -eq 'baseline'){$qaRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../output/optimization/baseline-runtime-20261008'));$expectedIdentifier='com.copycreator.qabaseline20261008v2'}
+$expectedExe=Join-Path $qaRoot 'copy-creator-qa.exe'
+if($Scope -eq 'suiji'){$qaRoot=Join-Path $qaRoot 'suiji-dev';$expectedIdentifier='com.copycreator.qasuiji20261010';$expectedExe=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../copy-creator/src-tauri/target/debug/copy-creator.exe'))}
 if([IO.Path]::GetFullPath($Metadata) -ne (Join-Path $qaRoot 'process.json')){throw 'Expected exact default QA metadata'}
 function Assert-QaStopped {
+ & (Join-Path $PSScriptRoot 'qa-process-isolation.ps1') | Out-Null
  $info=Get-Content -LiteralPath $Metadata -Raw | ConvertFrom-Json
- if($info.identifier -ne $expectedIdentifier -or [IO.Path]::GetFullPath($info.exe) -ne (Join-Path $qaRoot 'copy-creator-qa.exe')){throw 'Expected isolated QA process'}
+ if($info.identifier -ne $expectedIdentifier -or [IO.Path]::GetFullPath($info.exe) -ne $expectedExe){throw 'Expected isolated QA process'}
  if($Scope -eq 'baseline' -and ($info.generation -ne 2 -or $info.pasteIsolation -ne 'identifier' -or $info.autostartIsolation -ne 'identifier')){throw 'Expected rebuilt isolated baseline'}
  if((Get-FileHash -LiteralPath $info.exe -Algorithm SHA256).Hash -ne $info.sha256){throw 'QA hash mismatch'}
  $running=Get-Process -Id $info.pid -ErrorAction SilentlyContinue
@@ -101,25 +104,34 @@ function Restore-WithReceipt([bool]$Automatic) {
  $receipt | ConvertTo-Json | Set-Content -LiteralPath $recoveryReceipt -Encoding utf8
  $receipt | ConvertTo-Json -Compress
 }
-@{ready=$true;formatsPreserved=$snapshot.Count;recoveryRequest=$recoveryRequest;recoveryReceipt=$recoveryReceipt;scope='Original clipboard held only in private process memory; no original values, bytes or hashes output'} | ConvertTo-Json -Compress
+$ready=@{ready=$true;formatsPreserved=$snapshot.Count;recoveryRequest=$recoveryRequest;recoveryReceipt=$recoveryReceipt;scope='Original clipboard held only in private process memory; no original values, bytes or hashes output'}
+$commandPath=Join-Path $qaRoot "reports/clipboard-command-$PID.json"
+$responsePath=Join-Path $qaRoot "reports/clipboard-response-$PID.json"
+if($Detached){$ready.commandPath=$commandPath;$ready.responsePath=$responsePath;$ready | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qaRoot "reports/clipboard-session-$PID.json") -Encoding utf8}
+$ready | ConvertTo-Json -Compress
 try {
  while($true){
-  $read=[QaClipboardSnapshot]::ReadCommand()
+  $read=if($Detached){$null}else{[QaClipboardSnapshot]::ReadCommand()}
   # A clipboard owner must process WM_DESTROYCLIPBOARD while another app
   # replaces our synthetic text. Blocking ReadLine would stall that app.
-  while(-not $read.IsCompleted){
+  while(($Detached -and -not(Test-Path -LiteralPath $commandPath)) -or (-not $Detached -and -not $read.IsCompleted)){
    [System.Windows.Forms.Application]::DoEvents()
-   if(Test-Path -LiteralPath $recoveryRequest){Restore-WithReceipt $true;return}
+   if(Test-Path -LiteralPath $recoveryRequest){
+    try{Restore-WithReceipt $true;return}catch{Start-Sleep -Milliseconds 1000}
+   }
    Start-Sleep -Milliseconds 10
   }
-  $line=$read.GetAwaiter().GetResult();if($null -eq $line){break}
+  if($Detached){$line=Get-Content -LiteralPath $commandPath -Raw;Remove-Item -LiteralPath $commandPath}
+  else{$line=$read.GetAwaiter().GetResult();if($null -eq $line){break}}
   $request=$line | ConvertFrom-Json
+  $response=$null
   switch($request.command){
-   'writeText' {$snapshot.WriteSynthetic([string]$request.text);@{writtenSynthetic=$true}|ConvertTo-Json -Compress}
-   'checkText' {@{syntheticMatches=$snapshot.MatchesSynthetic([string]$request.expected)}|ConvertTo-Json -Compress}
-   'restore' {Restore-WithReceipt $false;exit}
+   'writeText' {$snapshot.WriteSynthetic([string]$request.text);$response=@{writtenSynthetic=$true}}
+   'checkText' {$response=@{syntheticMatches=$snapshot.MatchesSynthetic([string]$request.expected)}}
+   'restore' {try{Restore-WithReceipt $false;exit}catch{$response=@{restored=$false;error='Stop all owned QA processes before restoring; private snapshot retained'}}}
    default {throw 'Unsupported controlled clipboard command'}
   }
+  if($response){if($Detached){$response|ConvertTo-Json|Set-Content -LiteralPath $responsePath -Encoding utf8}else{$response|ConvertTo-Json -Compress}}
  }
 } finally {
  if(-not $snapshot.Restored){Restore-WithReceipt $true}

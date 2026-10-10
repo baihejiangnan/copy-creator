@@ -1,5 +1,7 @@
 # Copy Creator — 产品架构文档
 
+2026-10-10 随记整合：`PhrasePage/SuijiPage` 复用 `NoteEditor`、`NoteCoordinator`、有界 `NoteFeed` 和原生粘贴，不再新增独立便签侧栏。schema 6 新增 `note_organization`/`note_group_colors`，旧 `phrases` 在同一迁移事务中提升为 notes，旧分组沿用；`list_suiji` 提供摘要分页、分组过滤及可选 `sort=updated|created`；原生白名单选择对应时间列，与 ID 一起倒序构建游标，前端切换排序重置分页/代次并保留过滤范围，未传排序的旧接口行为保持，`organize_note` 使用 mutation ID、revision CAS 和存储代次。分组删除推进记录 revision，保留正文与常用。全局新建快捷键与窗口快捷键分别注册，设置失败回滚。 `RecordPreview` 通过独立 `LatestQuery` 按需读取一个完整预览，不占用编辑草稿缓存，迟到响应按挂载状态和存储代次拒绝；菜单样式集中到 `context-menu.css`。编辑分组使用 `RecordGroupSelect` 包装通用 `SelectMenu`，定位、滚动、焦点及动效样式由共享组件维护，通过 portal 渲染并按可视窗口定位，限制宽高、内部滚动、键盘及关闭时焦点处理；随记搜索直接复用剪贴板的 `SearchInput`，新增可选长度和组合事件参数以保留查询合同。默认灰色分组的显示色由 ID 稳定派生，用户自选颜色继续来自组织数据，数据库协议未变。协议与实测见[随记设计](../features/notes-design.md#2026-10-10-随记整合当前交互)、[随记验证](../verification/2026-10-10-suiji.md)。
+
 收尾补充：O-01 基线与 O-02 字体集合验收已收回；连续粘贴补查获得外部剪贴板占用证据，默认已加入有界等待、焦点/序列校验与失败可见提示；最终连续 20 次复验第 17 次仍空，整体粘贴验收未通过，保留外部目标无确认协议的边界。最终 Release 46,393,856 字节，NSIS/MSI 32.19/33.94 MB；20MB 按用户指示为尽力参考。详见[粘贴等待与失败提示收尾](../verification/2026-10-08-closeout.md#粘贴等待与失败提示收尾)，整体状态以 TODO 为准。
 
 首次 ready 前真实托盘退出已在最新默认通过：根节点尚空时不提前退出，恢复脚本/首次交接后实际结束。S-01 及其 N-03/N-06 依赖验收收回；新原生进程自动检查关/开为 0/1、关于 UI/焦点和最终静态依赖图补齐 O-07，详见[归并与边界](../verification/2026-10-08-closeout.md#首次-ready-与依赖验收收回)。
@@ -50,17 +52,21 @@
 
 网站资料模块使用 `VaultPage`、`vaultStore` 和根组件 `VaultSession` 管理界面与锁定事件，Rust `vault.rs` 执行会话权限、加密记录 CRUD 和主密码轮换，`vault_crypto.rs` 提供 Argon2id、AES-256-GCM 与随机密码生成。SQLite 新增 `vault_config` / `vault_entries`，资料内容不进入剪贴板历史表。模块详情见 [网站资料功能说明](../features/website-vault.md)。
 
-`backup.rs` 默认导出 v3 并读取 v0/v1/v2，新增活动/归档便签、引用和来源；`note_backup.rs` 处理语义冲突与独立恢复来源去重，schema 3 新增 `note_import_origins`。API Key 可移植保护和密码箱主密码合并规则保留；全部导入对象共用事务。长度聚合预检、累计 JSON 预算和精确有界 writer 保持 100/74 MiB 上限；图片准备移出锁，提交前复核，见[加密备份与恢复](../features/encrypted-backup.md)。
+网站资料与随记共用 `components/SelectMenu.tsx`（`RecordGroupSelect` 仅包装分组数据），菜单经 portal 避免编辑容器裁剪，视口限制、滚动及键盘/焦点逻辑只维护一份。搜索共用 `SearchInput`，网站资料局部表单 CSS 排除搜索输入。`VaultPage` 按模式重建入场容器，不保留退场页面；锁定由既有 store/session 立即清空并卸载资料，未改原生命令、存储身份或权限边界。实现/浏览器检查见[样式同步验证](../verification/2026-10-10-vault-style.md)。
+
+`backup.rs` 默认导出 v4 并读取 v0/v1/v2/v3，包含活动/归档随记、引用、来源、分组与常用状态；`note_backup.rs` 处理语义冲突与独立恢复来源去重，schema 3 新增 `note_import_origins`。API Key 可移植保护和密码箱主密码合并规则保留；全部导入对象共用事务。长度聚合预检、累计 JSON 预算和精确有界 writer 保持 100/74 MiB 上限；图片准备移出锁，提交前复核，见[加密备份与恢复](../features/encrypted-backup.md)。
 
 主窗口和隐藏 `radial-menu` WebView 使用独立 HTML/TSX 入口，各有 JS 状态和图片队列；业务页与 CSS 按需加载，只挂载活动主页面。缩略图与完整预览分别有界，轮盘隐藏时不挂图片；每 WebView 的预算不能当作全应用预算。SQLite 维持单个 `Mutex<Connection>`，统一 WAL/FULL；部分旧同步命令仍需按实际热点改造。依赖闭包、体积与运行证据见 [优化方案](../features/performance-design.md)。
+
+Windows 开发源码的 `single_instance.rs` 在 `wait_for_update_parent` 完成后、Tauri Builder 和数据库初始化前取得命名锁，以 `Local` 会话命名空间及用户 SID/identifier 摘要区分正式应用、不同用户和 QA；同 identifier 的安装版、便携版及不同版本共用锁。第二进程即使遇到首实例尚未初始化也不能继续建立托盘或读写存储。一个自动复位事件合并手动唤起，一个休眠线程转发到主线程且至多保留一个待执行回调，主窗口执行恢复/显示/聚焦而非 toggle；`--hidden` 不发信号。IPC 仅允许当前用户，保留系统完整性保护，失败直接终止本次启动。普通重启只在保存屏障、后台排空和敏感资料清理完成后释放锁，再执行已有 Tauri 主线程重启；更新/管理员新进程继续等待旧 PID 退出。异常退出由内核关闭句柄回收锁。当前为源码实现，桌面与跨权限验收边界见[单实例验证](../verification/2026-10-10-single-instance.md)。
 
 ### 已落地的第一批基础
 
 `notes.rs` 提供独立数据层与异步命令，`notes`/`note_refs` 随 `user_version=2` 建表；正文/引用/摘要/revision 同事务，CAS 和幂等测试通过，列表无正文。便签后台最多接受 4 读/32 写任务，写待处理时新查询返回 busy；前端查询合并/代次与队列已接入。默认关闭的 diagnostics 分别记录排队、等锁、持锁和粗粒度 SQL 时间，不记录语句/参数；2,000 条便签并发保存已测，清理/备份联合压力仍待验。
 
-启动与目标库共用 `db::initialize_connection`：WAL/FULL、8 MiB cache、外键和 5s busy timeout；schema 1/2/3/4/5 逐步事务迁移，持久连接核对 WAL 返回值。FULL 每 WAL 提交同步后确认，依赖系统/设备遵守 sync，真实断电未测。schema 4 的 `clipboard_usage`/`clipboard_assets` 由事务触发器维护内容字节、收藏与共享图片尺寸/引用；容量读取不扫描全库正文/文件，超限与 TTL 每批最多 100 条。图片创建/提交与回收协调，回收前写保留复核；缩略图解码在锁外，写回前检查引用，失败回收有界重试。统计是剪贴板逻辑预算，实测边界见[容量记录](../verification/2026-10-07-accounting-desktop.md)。
+启动与目标库共用 `db::initialize_connection`：WAL/FULL、8 MiB cache、外键和 5s busy timeout；schema 1/2/3/4/5/6 逐步事务迁移，持久连接核对 WAL 返回值。FULL 每 WAL 提交同步后确认，依赖系统/设备遵守 sync，真实断电未测。schema 4 的 `clipboard_usage`/`clipboard_assets` 由事务触发器维护内容字节、收藏与共享图片尺寸/引用；容量读取不扫描全库正文/文件，超限与 TTL 每批最多 100 条。图片创建/提交与回收协调，回收前写保留复核；缩略图解码在锁外，写回前检查引用，失败回收有界重试。统计是剪贴板逻辑预算，实测边界见[容量记录](../verification/2026-10-07-accounting-desktop.md)。
 
-`storage.rs` 用一致源事务、目标联合提交及可校验暂存凭据替换了临时拒绝保护，源路由失败不切连接/epoch。设置、密码箱、便签/引用/恢复来源随迁移；剪贴板/短语/应用图片保留原目录，目标原数据不覆盖。默认 Release 已通过普通目标冲突、目标提交后的源路由故障及期间编辑的重试、原目标设置/协议身份保持和多级路由重启；旧模块缓存与密码箱等桌面联合验收继续。见[事务测试](../verification/2026-10-07-backup-relocation.md)及[原生桌面补验](../verification/2026-10-07-file-backup-desktop.md)。
+`storage.rs` 用一致源事务、目标联合提交及可校验暂存凭据替换了临时拒绝保护，源路由失败不切连接/epoch。设置、密码箱、随记/引用/恢复来源及分组/常用/颜色随迁移；剪贴板/应用图片保留原目录，目标原数据不覆盖。默认 Release 已通过普通目标冲突、目标提交后的源路由故障及期间编辑的重试、原目标设置/协议身份保持和多级路由重启；旧模块缓存与密码箱等桌面联合验收继续。见[事务测试](../verification/2026-10-07-backup-relocation.md)及[原生桌面补验](../verification/2026-10-07-file-backup-desktop.md)。
 
 `maintenance.rs` 以单个专用线程/单调 deadline 调度周期 TTL：默认一小时，到期被 producer 暂停、待保存或 DB 竞争挡住时保留工作，不积累周期队列。SQL 失败退避 60 秒并保留到期工作；周期剪贴板/最近删除便签每批最多 100 条，批间释放 producer；保存排队时让出清理，已持锁事务不抢断。显式 diagnostics 的非正式标识才允许 QA 周期覆盖；普通构建/正式标识固定默认。诊断只记数值批次/队列/等锁/持锁/SQL，实际暂停与保护边界见[周期验证](../verification/2026-10-08-cleanup-profile.md#周期-ttl-的暂停重试与分项指标)。
 
@@ -85,7 +91,7 @@ Windows 终止路径在统一保存确认、接受入口关闭、原生任务/DB
   - 剪贴板删除/收藏/备注的成功确认也捕获独立存储 generation；迁移后的旧确认不得删除目标同 ID 记录/图片缓存或覆盖其收藏/备注。事件身份与响应代次各自校验，真实两类竞态分别复验。
   - 剪贴板变更/刷新/未读、短语组与 Key 提示事件采用 `{storage_epoch,value}`，生产者或排他交接存续期间标记身份；前端拒绝旧或无身份事件，切换清除旧提示。未读初读和清零确认也核验身份，避免旧结果覆盖新目录。真实同 ID 旧收藏事件已复现并修复，见[竞态证据](../verification/2026-10-08-vault-phrase-regression.md#剪贴板旧事件的真实发现)。
 - **有界后台执行**：便签和确认的重命令避开主线程，查询合并、队列有界，保存与搜索/维护有明确调度规则。保持单连接起步，先缩短锁；备份图片解码/准备文件移到锁外，提交前复核身份/冲突，不用连接池掩盖锁内重工作。
-- **备份与恢复**：v3 纳入便签，保留旧版本兼容和原子导入；恢复副本重新分配便签/引用/创建请求身份。保留容量上限，预检与读取/序列化有界，测拒绝路径内存，不先加载超大集合。
+- **备份与恢复**：v4 纳入随记分组与常用，保留 v3 便签和更旧版本兼容及原子导入；恢复副本重新分配便签/引用/创建请求身份。保留容量上限，预检与读取/序列化有界，测拒绝路径内存，不先加载超大集合。
 - **双入口与页面按需加载**：主窗/轮盘拆分，纯 UI/CSS 延迟加载，权限/会话与更新检查语义保留；隐藏轮盘暂停图片和无效列表工作。依赖图、首次切页和总 chunks 都需验收。
 
 S 项只交付一次；N 的可靠性与自身有界运行必需，O 中其他旧模块改造按证据推进，不把整套全应用重构设为便签前置。

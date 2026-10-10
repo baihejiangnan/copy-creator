@@ -7,10 +7,12 @@ import { notePlainTextExtensions } from "../../lib/noteEditorState";
 const external = Annotation.define<boolean>();
 interface Props {
   value: string; label: string; readOnly: boolean;
+  placeholderText?: string;
   onChange(value: string): boolean;
   onComposing(composing: boolean): void;
   onBlur(): void;
   onTooLarge(): void;
+  focusTick?: number;
 }
 
 /** Keeps the full document in editor state and only draws the visible range.
@@ -23,6 +25,7 @@ export default function NoteBodyEditor(props: Props) {
   const currentText = useRef(props.value);
   const access = useRef(new Compartment());
   const description = useRef(new Compartment());
+  useEffect(() => { if (props.focusTick !== undefined) view.current?.focus(); }, [props.focusTick]);
   useLayoutEffect(() => { callbacks.current = props; });
   useEffect(() => {
     const parent = host.current; if (!parent) return;
@@ -31,7 +34,7 @@ export default function NoteBodyEditor(props: Props) {
       doc: initial.current.value,
       extensions: [notePlainTextExtensions, EditorView.lineWrapping,
         access.current.of([EditorState.readOnly.of(initial.current.readOnly), EditorView.editable.of(!initial.current.readOnly)]),
-        description.current.of([EditorView.contentAttributes.of({ "aria-label": initial.current.label, "aria-multiline": "true", spellcheck: "true" }), placeholder(initial.current.label)]),
+        description.current.of([EditorView.contentAttributes.of({ "aria-label": initial.current.label, "aria-multiline": "true", spellcheck: "true" }), placeholder(initial.current.placeholderText ?? initial.current.label)]),
         EditorView.theme({
           "&": { height: "100%", color: "inherit", backgroundColor: "transparent", fontSize: "inherit" },
           "&.cm-focused": { outline: "none" },
@@ -66,6 +69,7 @@ export default function NoteBodyEditor(props: Props) {
       ],
     }) });
     view.current = editor;
+    if (initial.current.focusTick !== undefined) editor.focus();
     return () => { live = false; view.current = null; callbacks.current.onComposing(false); editor.destroy(); };
   }, []);
   useEffect(() => {
@@ -78,7 +82,7 @@ export default function NoteBodyEditor(props: Props) {
     view.current?.dispatch({ effects: access.current.reconfigure([EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly), EditorView.contentAttributes.of({ "aria-readonly": String(props.readOnly) })]) });
   }, [props.readOnly]);
   useEffect(() => {
-    view.current?.dispatch({ effects: description.current.reconfigure([EditorView.contentAttributes.of({ "aria-label": props.label, "aria-multiline": "true", spellcheck: "true" }), placeholder(props.label)]) });
-  }, [props.label]);
+    view.current?.dispatch({ effects: description.current.reconfigure([EditorView.contentAttributes.of({ "aria-label": props.label, "aria-multiline": "true", spellcheck: "true" }), placeholder(props.placeholderText ?? props.label)]) });
+  }, [props.label, props.placeholderText]);
   return <div className="notes-body-editor" ref={host} />;
 }

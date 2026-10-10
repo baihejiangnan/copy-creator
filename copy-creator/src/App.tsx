@@ -19,7 +19,6 @@ import LifecycleStatus from "./components/LifecycleStatus";
 import RestartAsAdminButton from "./components/RestartAsAdminButton";
 import { refreshWindowVisibility } from "./lib/documentVisible";
 import { invokeStorage, getStorageIdentity, isCurrentStorageIdentity, onStorageIdentity, type StorageEvent } from "./lib/storageIdentity";
-const NotesPage = React.lazy(() => import("./pages/NotesPage"));
 const PhrasePage = React.lazy(() => import("./pages/PhrasePage"));
 const TranslationPage = React.lazy(() => import("./pages/TranslationPage"));
 const VaultPage = React.lazy(() => import("./pages/VaultPage"));
@@ -28,7 +27,7 @@ const AboutDialog = React.lazy(() => import("./components/AboutDialog"));
 
 const PANEL_MAP: Record<string, { titleKey: string; component: React.ReactNode }> = {
   clipboard: { titleKey: "tabs.clipboard", component: <ClipboardPage /> },
-  notes: { titleKey: "tabs.notes", component: <NotesPage /> },
+  notes: { titleKey: "tabs.phrases", component: <PhrasePage /> },
   phrases: { titleKey: "tabs.phrases", component: <PhrasePage /> },
   translate: { titleKey: "tabs.translate", component: <TranslationPage /> },
   vault: { titleKey: "tabs.vault", component: <VaultPage /> },
@@ -36,7 +35,6 @@ const PANEL_MAP: Record<string, { titleKey: string; component: React.ReactNode }
 
 const NAV_ITEMS = [
   { panelType: "clipboard" },
-  { panelType: "notes" },
   { panelType: "phrases" },
   { panelType: "translate" },
   { panelType: "vault" },
@@ -79,9 +77,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (activePanel !== "notes") return;
+    if (activePanel !== "phrases" && activePanel !== "notes") return;
     const shortcuts = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.isComposing || saveBarrier.getSnapshot().busy) return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.isComposing || saveBarrier.getSnapshot().busy) return;
       if (event.key.toLowerCase() !== "n" && event.key !== "Enter") return;
       event.preventDefault();
       const create = event.key.toLowerCase() === "n";
@@ -100,13 +98,39 @@ function App() {
     const openNote = (event: Event) => {
       const id = (event as CustomEvent<{ id: string }>).detail?.id;
       if (typeof id !== "string") return;
-      React.startTransition(() => setActivePanel("notes"));
+      React.startTransition(() => setActivePanel("phrases"));
       void import("./stores/notesWorkspace").then(async ({ useNotesWorkspace }) => {
-        await useNotesWorkspace.getState().initialize(); await useNotesWorkspace.getState().open(id);
+        await useNotesWorkspace.getState().initialize();
+        // Open the record that was just captured instead of dropping to the list.
+        await useNotesWorkspace.getState().open(id).catch(useNotesWorkspace.getState().setError);
       });
     };
     window.addEventListener("open-note", openNote);
     return () => window.removeEventListener("open-note", openNote);
+  }, []);
+
+  useEffect(() => {
+    let disposed = false, processing = false;
+    const openDraft = async () => {
+      if (disposed || processing || saveBarrier.getSnapshot().busy) return;
+      processing = true;
+      try {
+        if (!await invoke<boolean>("pending_note_request") || disposed) return;
+        const { useNotesWorkspace } = await import("./stores/notesWorkspace");
+        await useNotesWorkspace.getState().initialize();
+        if (disposed || saveBarrier.getSnapshot().busy) return;
+        React.startTransition(() => setActivePanel("phrases"));
+        const workspace = useNotesWorkspace.getState();
+        workspace.create();
+        if (useNotesWorkspace.getState().error || !useNotesWorkspace.getState().selectedId) return;
+        await invoke("ack_note_request");
+      } catch (error) { console.error("Could not open quick draft", error); }
+      finally { processing = false; }
+    };
+    const listener = listen("new-note-requested", () => { void openDraft(); });
+    const resume = saveBarrier.subscribe(() => { if (!saveBarrier.getSnapshot().busy) void openDraft(); });
+    void listener.then(() => openDraft()).catch(console.error);
+    return () => { disposed = true; resume(); void listener.then(stop => stop()).catch(() => {}); };
   }, []);
 
   useEffect(() => {

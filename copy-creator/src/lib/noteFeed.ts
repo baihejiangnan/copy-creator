@@ -1,17 +1,20 @@
-import type { NoteCursor, NoteFailure, NoteFilter, NotePage, NoteSummary, StorageResult } from "../types/note.ts";
+import type { NoteCursor, NoteFailure, NoteFilter, NotePage, NoteSort, NoteSummary, StorageResult } from "../types/note.ts";
 import { LatestQuery } from "./latestQuery.ts";
 import { noteFailure } from "./noteCoordinator.ts";
-export interface NoteQuery { epoch: number; filter: NoteFilter; search: string; cursor: NoteCursor | null }
+export interface NoteQuery { epoch: number; filter: NoteFilter; search: string; cursor: NoteCursor | null; groupId?: string | null; sort: NoteSort }
 export interface NoteFeedState {
+  readonly storageEpoch?: number;
   readonly filter: NoteFilter; readonly search: string; readonly records: readonly NoteSummary[];
   readonly loading: boolean; readonly error: NoteFailure | null; readonly nextCursor: NoteCursor | null;
   readonly page: number; readonly canPrevious: boolean;
+  readonly groupId?: string | null;
+  readonly sort: NoteSort;
 }
 export class NoteFeed {
   private readonly transport: (query: NoteQuery) => Promise<StorageResult<NotePage>>;
   private readonly queue = new LatestQuery<StorageResult<NotePage>>();
   private readonly listeners = new Set<() => void>();
-  private state: NoteFeedState = Object.freeze({ filter: "active", search: "", records: [], loading: false, error: null, nextCursor: null, page: 1, canPrevious: false });
+  private state: NoteFeedState = Object.freeze({ filter: "active", search: "", sort: "updated", records: [], loading: false, error: null, nextCursor: null, page: 1, canPrevious: false });
   private epoch: number;
   private generation = 0;
   private cursor: NoteCursor | null = null;
@@ -20,7 +23,7 @@ export class NoteFeed {
   private stale = true;
   private paused = false;
   private flight: { generation: number; promise: Promise<void> } | null = null;
-  constructor(epoch: number, transport: (query: NoteQuery) => Promise<StorageResult<NotePage>>) { this.epoch = epoch; this.transport = transport; }
+  constructor(epoch: number, transport: (query: NoteQuery) => Promise<StorageResult<NotePage>>) { this.epoch = epoch; this.transport = transport; this.state = Object.freeze({ ...this.state, storageEpoch: epoch }); }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private publish(patch: Partial<NoteFeedState>) {
@@ -28,11 +31,12 @@ export class NoteFeed {
     for (const listener of this.listeners) { try { listener(); } catch { console.error("Note feed subscriber failed"); } }
   }
   setVisible(visible: boolean) { this.visible = visible; if (visible && this.stale) void this.load(); }
-  async setQuery(filter: NoteFilter, search: string) {
+  setSort(sort: NoteSort) { return this.setQuery(this.state.filter, this.state.search, this.state.groupId ?? null, sort); }
+  async setQuery(filter: NoteFilter, search: string, groupId: string | null = null, sort: NoteSort = this.state.sort) {
     if (Array.from(search).length > 256) throw { code: "notes.searchTooLong" };
-    if (filter === this.state.filter && search === this.state.search) return this.load();
+    if (filter === this.state.filter && search === this.state.search && groupId === (this.state.groupId ?? null) && sort === this.state.sort) return this.load();
     this.generation++; this.cursor = null; this.previous = []; this.stale = true;
-    this.publish({ filter, search, records: [], nextCursor: null, page: 1, canPrevious: false, error: null });
+    this.publish({ filter, search, groupId, sort, records: [], nextCursor: null, page: 1, canPrevious: false, error: null });
     return this.load();
   }
   invalidate() {
@@ -60,7 +64,7 @@ export class NoteFeed {
   switchEpoch(epoch: number) {
     if (epoch === this.epoch) return;
     this.epoch = epoch; this.generation++; this.cursor = null; this.previous = []; this.stale = true;
-    this.publish({ records: [], nextCursor: null, page: 1, canPrevious: false, error: null, loading: false });
+    this.publish({ storageEpoch: epoch, groupId: null, filter: "active", search: "", sort: "updated", records: [], nextCursor: null, page: 1, canPrevious: false, error: null, loading: false });
     if (this.visible) void this.load();
   }
   load(): Promise<void> {
@@ -68,7 +72,7 @@ export class NoteFeed {
     if (this.flight?.generation === this.generation) return this.flight.promise;
     if (!this.stale && !this.state.error) return Promise.resolve();
     const generation = this.generation;
-    const query = { epoch: this.epoch, filter: this.state.filter, search: this.state.search, cursor: this.cursor };
+    const query = { epoch: this.epoch, filter: this.state.filter, search: this.state.search, cursor: this.cursor, groupId: this.state.groupId ?? null, sort: this.state.sort };
     const key = JSON.stringify([generation, query]);
     this.publish({ loading: true, error: null });
     const promise = this.queue.run(key, () => this.transport(query)).then((response) => {

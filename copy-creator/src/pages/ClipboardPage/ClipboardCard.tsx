@@ -407,7 +407,7 @@ function ClipboardCardInner({
       {ctxMenu && createPortal(
         <div
           ref={ctxRef}
-          className="clipboard-ctx-menu"
+          className="app-context-menu"
           style={{ top: ctxMenu.y, left: ctxMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >

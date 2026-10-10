@@ -1,5 +1,13 @@
 # Copy Creator — 开发日志
 
+## 2026-10-10：随记界面细化
+
+按用户五项反馈完善分组开关动效与间距、新建/详情书写面板、共享右键样式、长内容限高展开和分组竖线配色。全文预览使用有界独立读取，不进入可恢复草稿缓存。浏览器真实组件与合成 IPC 完成亮暗、中英、小窗口、菜单边界、失败重试和迟到读取检查；前端 83/83、类型/完整 lint/生产构建通过。原生桌面联合验收仍保留，详见[随记界面验证](verification/2026-10-10-suiji.md#界面优化补充)，任务状态维护在 TODO。
+
+## 2026-10-10：Windows 重复启动保护
+
+用户反馈反复点击快捷方式/EXE 出现多个托盘与进程，并要求修复。开发源码在 Tauri 和数据库初始化前增加按用户/会话/identifier 区分的原生命名锁，手动重复启动以单个自动复位事件唤起已有窗口，开机隐藏启动不弹窗；原生重启保留保存/排空前提，更新和管理员重启复用旧 PID 等待。采用内核句柄回收避免异常结束留下永久锁。完整 Rust 161 通过/5 忽略，6 项新增单实例测试含实际子进程与异常终止。保留原有未提交文档修改，基础版本保持 0.2.28，未提交、推送或发行；原始检查及桌面缺口见[单实例验证](verification/2026-10-10-single-instance.md)，任务状态只维护在 TODO。
+
 ## 2026-10-09 — 签名更新与本地发行准备
 
 按用户选择完整接入公开元数据、应用内下载/验签和用户选择升级，替换客户端匿名 REST 检查。共用代理与全应用更新门闸，自动尝试间隔 24 小时；固定资产 URL、独立平台签名、逐块容量限制、下载前复查及使用前再验签均在原生层成立。升级复用便签/设置保存与后台排空，便携新版等待旧进程退出后才初始化。准备六文件签名构建脚本与同客户端源码的验证器，保留旧客户端手动过渡规则。
@@ -473,3 +481,21 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
 ### 2026-10-09：用户接受已知问题后正式发布 0.2.25
 
 用户明确选择“接受已知问题，正式发布”。14:24:22（Asia/Shanghai）将 [0.2.25 Release](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1) 转为正式公开并设为 Latest；GitHub 元数据及唯一便携 EXE 的大小/摘要再次核对一致，标签仍指向构建源码 `8e76dab`。同步中英文下载入口和相关文档，粘贴失败、内存与剩余联合验收缺口保留 TODO，原 goal 保持暂停。本次正式发布由用户明确接受缺口授权，不代表整体首发与性能验收通过。
+
+## 2026-10-07 / 2026-10-09 — 发布流程历史核对
+
+2026-10-07 的首次只读核对时，个人仓库只有 0.2.24 一次公开 Release；下表保留当时快照。2026-10-09 复核已有 0.2.24、0.2.25 两次公开 Release，**当时** Latest 是 [0.2.25](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.25-baihejiangnan.1)，构建源码 `8e76dabee6099ddd98c9a1fe475bf34d17eee5d5`，仅发布便携 EXE。详情见 [0.2.25 发布记录](verification/2026-10-09-release-025.md)。这些是历史快照，不能代替执行本次任务时查询实际 Latest、标签与远端 SHA。
+
+| 项目 | 已核实的历史事实 |
+| --- | --- |
+| 个人仓库 | `origin`：`https://github.com/baihejiangnan/copy-creator.git` |
+| 上游仓库 | `upstream`：`https://github.com/hu-qi-jia/copy-creator.git` |
+| 主分支 | `main`；核对时本地 HEAD 与远端 main 均为 `2fca6982357dc604de640b0e35056873fac6390f` |
+| 个人版发布 | [Copy Creator 0.2.24 个人增强版](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.24-baihejiangnan.1)，2026-09-24 发布 |
+| 标签与源码 | `v0.2.24-baihejiangnan.1` 指向 `d467aa2ec4d3f6a0df3c4c19f6cb1eaf54059453`；后续 README/截图提交 `2fca698` 未另发 Release |
+| 附件 | 仅 `Copy-Creator-0.2.24-portable.exe`，73,967,616 字节 |
+| 发布说明 | 中文描述个人增强内容、便携用法和实际检查结果 |
+| 提交风格 | `feat:`、`fix:`、`perf:`、`refactor:`、`docs:`、`chore:`；版本提交已有 `chore: release v0.2.24` 示例 |
+| 自动化 | 本地无 `.github/workflows/`；远端 Actions workflows 数量为 0，不能假设推送或打标签会自动编译发布 |
+
+历史默认：源码更新到个人仓库 `origin/main`；需要发布时在本地通过 Tauri CLI 构建 Windows 便携 EXE，再上传个人仓库 Release。历史记录不足以确认当时的具体构建命令、签名状态和全部桌面验收结果。2026-10-09 已接入公开元数据与签名下载；后续发行带该客户端的新版本时，当前执行方式见 [发布规则](features/release-rules.md)，本节仅保存历史依据。

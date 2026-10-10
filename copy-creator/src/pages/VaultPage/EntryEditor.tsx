@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import SelectMenu from "../../components/SelectMenu";
 import { Icons } from "../../components/Icons";
 import { useVaultStore } from "../../stores/vaultStore";
 import { PERSONAL_TEMPLATES, VERIFICATION_KINDS } from "../../types/vault";
@@ -55,7 +56,7 @@ export default function EntryEditor({ initial, onCancel, onSaved }: Props) {
     <section className="vault-section">
       <div className="vault-section-heading"><h3>{t("vault.personalInfo")}</h3><span className="vault-caption">{t("vault.optional")}</span></div>
       <p className="vault-caption">{t("vault.personalHint")}</p>
-      <div className="vault-template-actions"><select aria-label={t("vault.profileTemplate")} value={template} onChange={(event) => setTemplate(event.target.value as keyof typeof PERSONAL_TEMPLATES)}><option value="personal">{t("vault.personalTemplate")}</option><option value="work">{t("vault.workTemplate")}</option></select><button type="button" className="vault-button secondary small" onClick={addTemplate} disabled={entry.fields.length >= 60}>{t("vault.applyTemplate")}</button></div>
+      <div className="vault-template-actions"><SelectMenu<keyof typeof PERSONAL_TEMPLATES> ariaLabel={t("vault.profileTemplate")} value={template} onChange={setTemplate} options={[{ value: "personal", label: t("vault.personalTemplate") }, { value: "work", label: t("vault.workTemplate") }]} /><button type="button" className="vault-button secondary small" onClick={addTemplate} disabled={entry.fields.length >= 60}>{t("vault.applyTemplate")}</button></div>
       {entry.fields.map((field, index) => <div className="vault-custom-field" key={field.id}>
         <div className="vault-custom-heading"><input aria-label={t("vault.fieldName")} value={field.label} placeholder={t("vault.fieldName")} onChange={(event) => update({ fields: entry.fields.map((value, i) => i === index ? { ...value, label: event.target.value } : value) })} required maxLength={80} /><button className="vault-icon-button danger-text" type="button" aria-label={t("vault.removeField")} onClick={() => update({ fields: entry.fields.filter((_, i) => i !== index) })}>{Icons.delete}</button></div>
         <textarea aria-label={field.label || t("vault.fieldValue")} rows={2} value={field.sensitive && !revealed.includes(field.id) && field.value ? "••••••••" : field.value} readOnly={field.sensitive && !revealed.includes(field.id)} onChange={(event) => update({ fields: entry.fields.map((value, i) => i === index ? { ...value, value: event.target.value } : value) })} maxLength={16384} placeholder={t("vault.fieldValue")} />
@@ -76,7 +77,7 @@ export default function EntryEditor({ initial, onCancel, onSaved }: Props) {
           <label className="vault-form-field compact">{t("vault.verificationNote")}<input value={method.note} onChange={(event) => update({ verification: entry.verification.map((value, i) => i === index ? { ...value, note: event.target.value } : value) })} maxLength={4096} /></label>
         </div>;
       })}
-      <div className="vault-template-actions"><select aria-label={t("vault.verificationTemplate")} value={verificationKind} onChange={(event) => setVerificationKind(event.target.value)}>{VERIFICATION_KINDS.map((kind) => <option key={kind} value={kind}>{t(`vault.methods.${kind}`)}</option>)}</select><button className="vault-button secondary small" type="button" disabled={entry.verification.length >= 32} onClick={() => {
+      <div className="vault-template-actions"><SelectMenu<string> ariaLabel={t("vault.verificationTemplate")} value={verificationKind} onChange={setVerificationKind} options={VERIFICATION_KINDS.map(kind => ({ value: kind, label: t(`vault.methods.${kind}`) }))} /><button className="vault-button secondary small" type="button" disabled={entry.verification.length >= 32} onClick={() => {
         const id = crypto.randomUUID();
         update({ verification: [...entry.verification, { id, kind: verificationKind, label: t(`vault.methods.${verificationKind}`), value: "", note: "" }] });
         setRevealed((current) => [...current, id]);

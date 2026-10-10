@@ -2,6 +2,123 @@
 
 > 2026-10-07：原有问题记录保留历史上下文和当时方案，旧行号/状态须对照源码。当前两个主任务与待验证项见 [TODO](TODO.md)，设计见 [便签](features/notes-design.md)和[性能与体积优化](features/performance-design.md)。
 
+## Windows 发行环境与故障处理
+
+正常发布步骤见 [发布规则](features/release-rules.md)；本节按遇到的问题查阅，详细命令不作为每次发行都要重复执行的检查。依据本机 [0.2.26](verification/2026-10-09-release-026.md)、[0.2.27](verification/2026-10-10-release-027.md)和[0.2.28](verification/2026-10-10-release-028.md) 的实际执行记录。
+
+连续约 2 分钟没有新输出时，查看本轮阶段日志、相关进程活动及远端状态，区分活跃编译/上传和凭据等待；该时间是诊断触发点，不是编译超时。只终止已确认属于本轮且确实阻塞的进程，不按进程名批量结束其他任务。原因未解决时不重复重试；修正后重试一次仍失败，保留证据继续定位。
+
+### Windows 构建环境与临时目录
+
+先从内层应用确认 Node/pnpm、Rust/MSVC、PowerShell 7 与 WindowsInstaller COM 可用，确认已锁定依赖和签名密钥存在；不读取或输出私钥、密码或认证 token。仅在发行子进程内调整 PATH、TMP/TEMP 和 NODE_OPTIONS，不改用户全局环境。
+
+本机系统 Temp 曾使 Rust 合成数据库测试以 `PermissionDenied`/`CannotOpen` 失败，优先在仓库根目录的忽略路径 `output/optimization/release-<新版本>/tmp` 创建专用目录，先写入并删除唯一命名、无敏感内容的探针确认可写，再让 TMP/TEMP 指向它。不要把失败归为产品数据库问题，也不要访问真实数据库排查。
+
+Vite 在 Windows 上可能执行 `net use` 并使用 piped stdio；Node 测试默认也会启动子进程。遇到 `spawn EPERM`，结合失败命令判断是否是当前工具沙箱拒绝进程创建。临时目录调整或 `--test-isolation=none` 不能解决 Vite 的子进程权限拒绝；不得为此改业务源码、跳过测试或替换构建入口。沿用会话已有执行权限授权，通过工具支持的机制在允许这些进程调用的环境重试；确实需要尚未授权的权限时说明具体被拒命令与原因，不把文档当作权限授予。
+
+检查继承的 NODE_OPTIONS 是否影响本轮构建；旧沙箱的测试隔离 workaround 不默认沿用到正常发行。本机 0.2.27/0.2.28 在允许进程创建的环境中移除该测试选项，按原测试入口通过。用户明确需要的其他 Node 参数应先核对用途，不能机械覆盖。
+
+下面是包装脚本示例，保存到上述忽略的发行准备目录后，从内层应用用 `pwsh -NoProfile -File <包装脚本绝对路径> -NotesFile <说明绝对路径> -Tag <本次标签>` 执行。示例按本机正常发行清除继承的 NODE_OPTIONS；Node 不在 PATH 时只在该子进程补充实际安装目录。不要把多行脚本挤成无分隔符的一行。
+
+```powershell
+param(
+    [Parameter(Mandatory=$true)][string]$NotesFile,
+    [Parameter(Mandatory=$true)][string]$Tag
+)
+$ErrorActionPreference = 'Stop'
+$releaseTemp = Join-Path $PSScriptRoot 'tmp'
+New-Item -ItemType Directory -Force -Path $releaseTemp | Out-Null
+$releaseProbe = Join-Path $releaseTemp ('write-probe-' + [guid]::NewGuid().ToString('N') + '.txt')
+[IO.File]::WriteAllText($releaseProbe, 'release temp probe')
+Remove-Item -LiteralPath $releaseProbe
+$env:TMP = $releaseTemp
+$env:TEMP = $releaseTemp
+Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue
+$releaseLog = Join-Path $PSScriptRoot 'build.log'
+& pnpm release:windows -NotesFile $NotesFile -Tag $Tag *>&1 | Tee-Object -FilePath $releaseLog
+$releaseExit = $LASTEXITCODE
+Write-Output "RELEASE-EXIT=$releaseExit"
+exit $releaseExit
+```
+
+每次重试用独立日志或先重命名旧日志，保留原始失败。`$ErrorActionPreference` 与 Tee-Object 不能代替原生退出码；包装脚本只有实际退出码为 0、正式摘要 `validationOnly=false`、sourceCommit/最终 HEAD 一致且六文件校验通过，才进入推送与上传。实际 Temp 或权限阻塞未解除时停止依赖步骤。
+
+### Git 凭据等待与本次认证
+
+`git push` 长时间无输出时先确认它是否等待本轮 git-credential-manager，并只读查询远端 main/标签是否已经更新。不是所有无输出都代表等待登录。已确认阻塞时先结束本轮等待的进程，等待原命令返回并核对远端，再重试；不要让两个 push 同时运行。
+
+GitHub CLI 已认证且对目标仓库有写权限时，可在本次发行子进程用其现有认证替代等待的 helper。不要把 token 拼进远端 URL、命令、环境日志或文档，不使用输出 token 的命令，也不默认修改全局 credential 配置。仓库根目录的示例：
+
+```powershell
+gh auth status
+if ($LASTEXITCODE -ne 0) { throw 'GitHub CLI authentication is unavailable' }
+$env:GIT_TERMINAL_PROMPT = '0'
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin main
+if ($LASTEXITCODE -ne 0) { throw 'Push main failed' }
+# $releaseTag 必须是本次已创建且绑定构建 SHA 的标签。
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin $releaseTag
+if ($LASTEXITCODE -ne 0) { throw 'Push release tag failed' }
+```
+
+第二条 helper 参数只作用于该命令，第一条清空继承的其他 helper。公开 fetch 或 `gh api` 读取成功不等于具备推送权限；认证、写权限或非快进失败时按实际原因处理，不能强推。推送后继续核对远端源码与标签 SHA；CLI 未认证时报告所需登录/权限，不自行更换账号或搜寻其他凭据。
+
+### Cargo.toml 换行造成的脏状态
+
+Tauri 可能重写 `copy-creator/src-tauri/Cargo.toml` 的换行；0.2.28 曾出现 `git status` 为修改、文本 diff 为空、规范化 blob 与 HEAD 相同。构建退出非零时不能直接使用该轮产物，即使签名已完成，也不能把失败改记为成功。
+
+先从仓库根目录核对全部状态、固定 HEAD、该文件 diff 和规范化内容，命令如下；每步检查退出码，不使用忽略空白的 diff 作为内容相同的唯一依据：
+
+```powershell
+git status --short
+git rev-parse HEAD
+git diff -- copy-creator/src-tauri/Cargo.toml
+git hash-object copy-creator/src-tauri/Cargo.toml
+git rev-parse HEAD:copy-creator/src-tauri/Cargo.toml
+git diff --cached --check
+```
+
+仅在构建开始时工作区干净、当前 HEAD 仍为固定构建 SHA、两项 blob 完全一致、暂存 diff 为空且无其他内容变化时，允许 `git add -- copy-creator/src-tauri/Cargo.toml` 刷新该文件的索引统计。随后用 `git diff --cached --quiet`、`git status --short` 和 HEAD 确认无暂存变化、工作区干净、提交未变，再从同一 SHA 重跑原发行脚本，使用新的成功摘要目录。
+
+存在真实源码/版本/依赖变化、别人的修改、暂存内容或 HEAD 改变时停止这种恢复，按授权审查、提交最终内容并重新固定 SHA 构建。禁止 `git reset --hard`、覆盖文件、批量暂存或用 `-AllowDirty` 掩盖变化；二进制和 `-text` 签名夹具不能套用此换行恢复。
+
+### 草稿 404、上传中断与按 ID 核对
+
+草稿的 `/releases/tags/<tag>` 在本次环境曾返回 404，但发行列表包含已上传草稿；不能据此认定创建失败。先检查创建命令状态及 `gh release list --repo baihejiangnan/copy-creator`，再从认证的发行列表按本次完整标签精确匹配取得 ID。以下示例中 `$releaseTag` 为本次标签，从仓库根目录执行；分页避免只查询首屏：
+
+```powershell
+$releasePages = gh api --paginate --slurp 'repos/baihejiangnan/copy-creator/releases?per_page=100'
+if ($LASTEXITCODE -ne 0) { throw 'Cannot list releases' }
+$releaseMatches = @(($releasePages | ConvertFrom-Json) | ForEach-Object { $_ } |
+    Where-Object { $_.tag_name -ceq $releaseTag })
+if ($releaseMatches.Count -ne 1) { throw 'Expected exactly one matching release; inspect remote state' }
+$releaseId = $releaseMatches[0].id
+$releaseJson = gh api "repos/baihejiangnan/copy-creator/releases/$releaseId"
+if ($LASTEXITCODE -ne 0) { throw 'Cannot read release by ID' }
+$release = $releaseJson | ConvertFrom-Json
+```
+
+核对该 ID 的 draft/prerelease、标签、正文、目标提交与实际远端标签解析的源码 SHA，再逐一比对本次精确六文件名、size、uploaded 状态和可用的 SHA-256 digest；附注标签对象须继续解析到 commit。草稿 digest 缺失时，使用维护者认证下载草稿副本至独立目录核对摘要、签名与元数据，不输出 token；这是公开前草稿核验，不能代替公开后匿名下载。目标字段不足以证明标签所指源码，不单独依赖 target_commitish。
+
+创建或上传中断后，先核对已有草稿与每个资产，保留已匹配文件；仅补传确认缺失的文件，不重复创建，不用通配符或默认 `--clobber`。存在不匹配资产、标签、多个匹配发行或状态不明时停止公开并定位原因。所有附件核对通过后才按既有授权公开；可按已经验证的发行 ID，通过 UTF-8 JSON 文件调用 `gh api --method PATCH ... --input <文件>` 设置 draft=false、prerelease=false、make_latest=true，并重新确认公开状态。上传成功不等于公开成功，公开成功也不等于匿名下载/桌面验收通过。
+
+### 单独构建便携 EXE 或 NSIS
+
+仅在用户要求这些本地产物时，从内层应用执行以下补充命令；正常六文件发行仍使用发布规则的 release:windows。这些命令不包含完整测试与六文件签名核验。
+
+```powershell
+node node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked
+if ($LASTEXITCODE -ne 0) { throw 'Portable build failed' }
+```
+
+明确要求额外 NSIS 时才运行：
+
+```powershell
+node node_modules/@tauri-apps/cli/tauri.js build --ci --bundles nsis -- --locked
+if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+```
+
+直接调用已安装的 Tauri CLI node 入口保留 Cargo 分隔符；本机 pnpm 11.7.0 的 exec 曾剥离该分隔符并被 CLI 拒绝。CLI 仍执行 beforeBuildCommand 的前端生产构建，默认 EXE 在 src-tauri/target/release/copy-creator.exe，安装包在其 bundle/。依赖已缓存且任务需要离线时才加 Cargo --offline；不以离线代替冻结依赖。NSIS 不作为当前客户端 MSI 更新包；便携不承诺数据在 EXE 旁或免除 WebView2 依赖。
+
 ## 一、已解决的问题
 
 ### 2026-10-08：拒绝旧响应仍不足以保护迁移后的存储

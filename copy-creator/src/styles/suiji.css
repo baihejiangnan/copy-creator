@@ -1,0 +1,177 @@
+.suiji-page { gap: 0; min-height: 0; }
+.suiji-page button,.suiji-menu button,.suiji-modal button { font-family:var(--font); cursor:pointer; transition:background .2s cubic-bezier(.22,1,.36,1),transform .2s cubic-bezier(.22,1,.36,1); }
+.suiji-page button:active,.suiji-menu button:active,.suiji-modal button:active { transform:scale(.95); }
+.suiji-toolbar { display:flex; align-items:center; gap:9px; padding:0 0 12px; flex-shrink:0; }
+.suiji-search { flex:1; min-width:0; }
+.suiji-picker-root { position:relative; flex:0 1 auto; min-width:52px; max-width:38%; }
+.suiji-group-trigger { display:flex; justify-content:center; align-items:center; gap:5px; width:100%; color:var(--text-secondary); background:transparent; border:0; font-size:12px; padding:6px; }
+.suiji-ellipsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1; }
+.suiji-list-head { display:flex; gap:8px; align-items:center; padding:10px 0 8px; border-top:1px solid var(--separator); color:var(--text-secondary); font-size:11px; flex-shrink:0; }
+.suiji-list-head .suiji-ellipsis { flex:0 1 auto; max-width:45%; }
+.suiji-list-head > span:last-child { margin-left:auto; font-size:10px; }
+.suiji-list { min-height:0; gap:8px; padding-top:2px; }
+.suiji-card { flex-shrink:0; cursor:pointer; border-radius:12px; }
+.suiji-card .phrase-card-body { white-space:pre-wrap; overflow-wrap:anywhere; }
+.suiji-card .phrase-card-footer { gap:8px; }
+.suiji-card .suiji-card-action { opacity:.5; width:24px; height:24px; }
+.suiji-card .suiji-card-action[aria-pressed=true] { opacity:.8; }
+.suiji-editor-tools { display:flex; gap:8px; align-items:center; flex-shrink:0; }
+.suiji-card .phrase-card-footer small { max-width:35%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }
+.suiji-card:focus-visible,.suiji-page button:focus-visible,.suiji-menu button:focus-visible { outline:2px solid var(--text-secondary); outline-offset:2px; }
+.suiji-empty { color:var(--text-secondary); text-align:center; margin:40px 12px; font-size:12px; }
+.suiji-footer { display:flex; gap:12px; align-items:center; flex-shrink:0; border-top:1px solid var(--separator); padding-top:9px; font-size:10px; color:var(--text-secondary); }
+.suiji-footer > span { flex:1; }
+.suiji-footer button { background:transparent; border:0; color:var(--text-secondary); font-size:11px; padding:3px 0; }
+.suiji-footer button[aria-pressed=true] { color:var(--text-primary); }
+.suiji-pagination { display:flex; gap:6px; align-items:center; }
+.suiji-menu { color:var(--text-primary); padding:5px; z-index:1000; font-size:12px; }
+.suiji-menu button { display:flex; align-items:center; gap:8px; text-align:left; border:0; background:transparent; color:var(--text-primary); width:100%; padding:8px; border-radius:5px; font-size:12px; overflow:hidden; }
+.suiji-menu button:hover,.suiji-menu button:focus-visible,.suiji-menu button[aria-pressed=true] { background:var(--chip-bg); }
+.suiji-menu button > span:last-child:not(.suiji-ellipsis),.suiji-menu small { margin-left:auto; color:var(--text-secondary); }
+.suiji-menu i { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.suiji-menu-divider { height:1px; background:var(--separator); margin:4px 6px; }
+.suiji-context { position:fixed; }
+.suiji-group-submenu { position:absolute; top:0; width:164px; box-sizing:border-box; overflow-y:auto; overflow-x:hidden; }
+.suiji-picker.suiji-menu { position:absolute; top:calc(100% + 7px); right:0; width:232px; max-width:calc(100vw - 40px); opacity:0; visibility:hidden; pointer-events:none; transform:translateY(-6px) scale(.97); transform-origin:top right; animation:none; transition:opacity .18s ease,transform .22s cubic-bezier(.22,1,.36,1),visibility .22s; }
+.suiji-picker.is-open { opacity:1; visibility:visible; pointer-events:auto; transform:translateY(0) scale(1); }
+.suiji-picker input { box-sizing:border-box; width:100%; background:var(--input-bg); color:var(--text-primary); border:1px solid var(--separator); border-radius:6px; padding:8px; font:inherit; }
+.suiji-picker-list { max-height:min(240px,40vh); overflow-y:auto; overflow-x:hidden; }
+.suiji-picker-list,.suiji-group-submenu { overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--text-secondary) 36%,transparent) transparent; }
+@supports selector(::-webkit-scrollbar) {
+  .suiji-picker-list,.suiji-group-submenu { scrollbar-width:auto; scrollbar-color:auto; }
+  .suiji-picker-list::-webkit-scrollbar,.suiji-group-submenu::-webkit-scrollbar { width:4px; }
+  .suiji-picker-list::-webkit-scrollbar-track,.suiji-group-submenu::-webkit-scrollbar-track { background:transparent; }
+  .suiji-picker-list::-webkit-scrollbar-thumb,.suiji-group-submenu::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--text-secondary) 36%,transparent); border-radius:2px; }
+  .suiji-picker-list::-webkit-scrollbar-thumb:hover,.suiji-group-submenu::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb,var(--text-secondary) 52%,transparent); }
+  .suiji-picker-list::-webkit-scrollbar-button,.suiji-group-submenu::-webkit-scrollbar-button { display:none; width:0; height:0; }
+}
+.suiji-picker-footer { display:flex; border-top:1px solid var(--separator); margin-top:4px; }
+.suiji-picker-footer button { justify-content:center; font-size:11px; }
+.suiji-recovery { display:flex; flex-direction:column; gap:5px; font-size:11px; color:var(--text-secondary); }
+.suiji-recovery button { text-align:left; background:var(--input-bg); color:var(--text-primary); border:1px solid var(--separator); border-radius:6px; padding:7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.suiji-modal-backdrop { position:fixed; inset:0; display:grid; place-items:center; background:#0004; z-index:1100; padding:16px; }
+.suiji-modal { box-sizing:border-box; width:360px; max-width:100%; max-height:85vh; overflow:auto; background:var(--bg-primary); color:var(--text-primary); border:1px solid var(--separator); border-radius:14px; padding:16px; font-size:12px; }
+.suiji-modal-head,.suiji-group-form,.suiji-managed-group { display:flex; align-items:center; gap:8px; }
+.suiji-modal-head { justify-content:space-between; margin-bottom:14px; }
+.suiji-modal button { background:transparent; border:0; color:var(--text-secondary); padding:5px; border-radius:5px; }
+.suiji-modal button:hover { background:var(--input-bg); }
+.suiji-modal input { background:var(--input-bg); border:1px solid var(--separator); border-radius:6px; color:var(--text-primary); padding:7px; min-width:0; flex:1; font:inherit; }
+.suiji-managed-groups { max-height:260px; overflow-y:auto; margin-top:12px; }
+.suiji-managed-group { padding:5px 0; }
+.suiji-managed-group .suiji-color { padding:0; width:9px; height:9px; flex-shrink:0; border-radius:50%; }
+.suiji-managed-group .suiji-group-name { text-align:left; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-primary); }
+.suiji-modal p { color:var(--text-secondary); font-size:11px; line-height:1.7; margin-bottom:0; }
+.suiji-page button:disabled,.suiji-modal button:disabled { opacity:.4; cursor:default; }
+
+/* Compact filter control and a visible, reversible disclosure motion. */
+.suiji-group-trigger { border-radius:7px; padding:7px 6px; }
+.suiji-group-trigger:hover,.suiji-group-trigger[aria-expanded=true] { background:var(--chip-bg); color:var(--text-primary); }
+.suiji-chevron,.suiji-text-toggle svg { width:14px; height:14px; flex-shrink:0; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; transition:transform .24s cubic-bezier(.22,1,.36,1); }
+.suiji-group-trigger[aria-expanded=true] .suiji-chevron,.suiji-text-toggle[aria-expanded=true] svg { transform:rotate(180deg); }
+.suiji-group-trigger .suiji-ellipsis { flex:0 1 auto; }
+
+/* Four visible text lines; opening one record retains a bounded scroll area. */
+.suiji-card .notibar { width:3px; border-radius:3px; margin-left:9px; }
+.suiji-preview-text { max-height:84px; line-height:21px; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; position:relative; }
+.suiji-preview-text.is-clipped { mask-image:linear-gradient(to bottom,#000 60%,#0008); }
+.suiji-preview-text.is-expanded { max-height:min(320px,42vh); overflow-y:auto; scrollbar-width:thin; cursor:text; }
+.suiji-card .suiji-text-toggle { display:flex; align-items:center; gap:3px; margin:5px 0 2px; padding:3px 6px; border:0; border-radius:5px; background:var(--chip-bg); color:var(--text-secondary); font-size:11px; }
+.suiji-text-toggle:hover { color:var(--text-primary); }
+.suiji-preview-error { font-size:12px; color:var(--text-secondary); }
+.suiji-card .phrase-card-footer small::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--color); margin-right:5px; vertical-align:1px; }
+.suiji-card .phrase-card-footer { padding-top:7px; }
+.suiji-card:focus-within .suiji-card-action,.suiji-card:hover .suiji-card-action { opacity:1; }
+
+/* Match the approved HTML: a compact capture panel and an open detail page. */
+.suiji-toolbar { gap:8px; padding-bottom:12px; }
+.suiji-group-trigger { height:36px; padding:0 9px; color:var(--text-primary); }
+.suiji-picker-root { max-width:118px; }
+.suiji-toolbar .suiji-create { display:grid; place-items:center; width:32px; height:32px; min-width:32px; padding:0; border:0; border-radius:8px; }
+.suiji-create svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; }
+.suiji-list-head { padding:3px 0 10px; margin-bottom:10px; border-top:0; border-bottom:1px solid var(--separator); font-size:10px; gap:5px; }
+.suiji-list-head small { font-size:inherit; }
+.suiji-sort { margin-left:auto; padding:3px 0 3px 8px; border:0; background:transparent; color:var(--text-secondary); font-size:10px; white-space:nowrap; }
+.suiji-sort:hover { color:var(--text-primary); }
+.suiji-sort span { color:var(--accent); }
+.suiji-footer { gap:7px; }
+.suiji-footer > button { display:flex; align-items:center; gap:5px; padding:5px 9px; border-radius:7px; border:1px solid transparent; }
+.suiji-footer > button svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
+.suiji-footer .suiji-archive-filter { color:light-dark(#5479a0,#a0bfe1); background:light-dark(#edf3fa,#303d4c); }
+.suiji-footer .suiji-trash-filter { color:light-dark(#ae7661,#dfad97); background:light-dark(#fbf0e9,#493a34); }
+.suiji-footer > button:hover { filter:brightness(.96); }
+.suiji-footer > button[aria-pressed=true] { border-color:currentColor; }
+.suiji-page { color-scheme:light; }
+[data-theme="dark"] .suiji-page { color-scheme:dark; }
+.suiji-composer { box-sizing:border-box; height:auto; min-height:0; flex:0 0 auto; gap:0; margin-bottom:14px; padding:10px 12px; border:1px solid color-mix(in srgb,var(--text-primary) 20%,transparent); border-radius:12px; background:var(--card-inner-bg); overflow:hidden; animation:cardEnter .2s ease; }
+.suiji-composer:not(.expanded) { max-height:min(280px,55vh); }
+.suiji-composer .suiji-editor-header { flex-shrink:0; flex-wrap:nowrap; gap:7px; padding:0; color:var(--text-secondary); }
+.suiji-pencil { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.6; flex-shrink:0; }
+.suiji-editor-heading { flex:1; font-size:11px; font-weight:400; }
+.suiji-composer .suiji-back,.suiji-composer .suiji-close,.suiji-composer .suiji-expand { display:flex; align-items:center; justify-content:center; gap:4px; border:0; background:transparent; color:var(--text-secondary); padding:3px; font-size:11px; flex-shrink:0; }
+.suiji-back svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.suiji-close svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.3; }
+.suiji-expand { width:22px; height:22px; border-radius:5px; }
+.suiji-expand span { display:block; width:10px; height:10px; border-top:1px solid currentColor; border-left:1px solid currentColor; position:relative; }
+.suiji-expand span::after { content:''; width:5px; height:5px; border-bottom:1px solid currentColor; border-right:1px solid currentColor; position:absolute; right:0; bottom:0; }
+.suiji-composer .notes-editor { flex:0 1 auto; gap:7px; padding:9px 0 0; }
+.suiji-composer .notes-title { padding:3px 0; border:0; border-radius:0; background:transparent; font-size:12px; line-height:1.5; font-weight:500 !important; }
+.suiji-composer .notes-title::placeholder { color:var(--text-secondary); font-weight:400; }
+.suiji-composer .notes-body-editor { flex:1 0 80px; min-height:80px; height:80px; border:0; border-radius:0; background:transparent; resize:none; font-size:12px; }
+.suiji-composer .notes-body-editor .cm-content { padding:0; }
+.suiji-composer .notes-body-editor .cm-scroller { line-height:1.9; }
+.suiji-composer .notes-body-editor:focus-within { outline:0; }
+.suiji-composer .notes-save-status { display:flex; gap:5px; align-items:center; margin-left:auto; font-size:10px; white-space:nowrap; }
+.suiji-composer .notes-save-status i { width:5px; height:5px; border-radius:50%; background:var(--text-tertiary); }
+.suiji-composer .is-quick .notes-save-status i { display:none; }
+.suiji-composer .notes-save-status[data-status=saved] i { background:#598c7b; }
+.suiji-composer .notes-save-status[data-status=conflict] i,.suiji-composer .notes-save-status[data-status=error] i { background:var(--danger); }
+.suiji-editor-group { display:flex; min-width:0; max-width:145px; flex-shrink:1; }
+.suiji-composer .suiji-editor-group-trigger { display:flex; align-items:center; gap:6px; width:100%; min-width:0; padding:5px 8px; border:1px solid transparent; border-radius:7px; background:var(--chip-bg); color:var(--text-primary); font:inherit; font-size:11px; text-align:left; outline:0; box-shadow:none; }
+.suiji-editor-group-trigger i { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.suiji-composer .suiji-editor-group-trigger[aria-expanded=true] { background:var(--chip-hover-bg); color:var(--text-primary); }
+.suiji-composer .suiji-editor-group-trigger:focus-visible { outline:0; border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 16%,transparent); }
+.suiji-composer .suiji-editor-header.is-quick button { width:18px; height:18px; padding:2px; }
+.suiji-composer .notes-editor.is-quick { gap:4px; }
+.suiji-composer .notes-editor.is-quick .notes-body-editor { flex-basis:65px; min-height:65px; height:65px; }
+.suiji-composer .suiji-expand[aria-pressed=true] { background:transparent; color:var(--text-secondary); }
+.suiji-composer .notes-actions { flex-wrap:nowrap; gap:6px; padding:8px 0 0; }
+.suiji-composer .suiji-save { display:flex; align-items:center; justify-content:center; gap:5px; padding:6px 12px; border:0; border-radius:7px; background:var(--text-primary); color:var(--bg-primary); font-size:11px; font-weight:500; white-space:nowrap; }
+.suiji-save svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
+.suiji-composer .notes-refs:empty { display:none; }
+.suiji-composer button:hover:not(:disabled):not(.suiji-save) { background:var(--chip-bg); }
+.suiji-composer .notes-error,.suiji-composer .notes-confirm { margin:8px 0; }
+.suiji-composer.expanded { position:absolute; inset:0; height:auto; z-index:10; margin:0; padding:0; border:0; border-radius:0; background:var(--panel-bg); }
+.suiji-page:has(.suiji-composer.expanded) > .suiji-toolbar,.suiji-page:has(.suiji-composer.expanded) > .suiji-list-head,.suiji-page:has(.suiji-composer.expanded) > .suiji-list,.suiji-page:has(.suiji-composer.expanded) > .suiji-footer { display:none; }
+.suiji-composer.expanded .suiji-editor-header { padding:10px 0 12px; border-bottom:1px solid var(--separator); }
+.suiji-composer.expanded .notes-editor { flex:1 1 0; padding:20px 4px 12px; gap:12px; }
+.suiji-composer.expanded .notes-title { font-size:17px; font-weight:600 !important; }
+.suiji-composer.expanded .notes-body-editor { flex:1 0 100px; min-height:100px; height:auto; font-size:13px; }
+.suiji-composer .suiji-editor-tools { gap:7px; border:0; padding:0; }
+.suiji-composer .suiji-editor-tools .suiji-editor-group { max-width:180px; }
+.suiji-composer .suiji-editor-tools .suiji-editor-group-trigger { border-color:var(--separator); background:transparent; }
+.suiji-composer .suiji-editor-tools .suiji-editor-group-trigger:focus-visible { border-color:var(--accent); }
+.suiji-composer .suiji-editor-star { display:grid; place-items:center; width:28px; height:28px; padding:5px; border:0; background:transparent; color:var(--text-secondary); }
+.suiji-editor-star svg { width:16px; height:16px; }
+.suiji-composer .suiji-editor-star[aria-pressed=true] { color:#c8a16e; background:transparent; }
+.suiji-editor-tools time { margin-left:auto; color:var(--text-secondary); font-size:10px; }
+.suiji-editor-more { flex-shrink:0; font-size:10px; color:var(--text-secondary); }
+.suiji-editor-more summary { cursor:pointer; width:fit-content; padding:2px 0; }
+.suiji-editor-more .notes-toolbar { margin-top:8px; }
+.suiji-editor-more button { font-size:11px; }
+.suiji-composer.expanded .notes-actions { border-top:1px solid var(--separator); padding:12px 0; flex-wrap:wrap; }
+.suiji-composer .notes-actions > button:not(.suiji-save) { border:0; padding:5px 7px; background:transparent; color:var(--text-secondary); font-size:11px; }
+.suiji-composer .notes-actions .suiji-delete { display:flex; align-items:center; gap:4px; color:var(--danger); }
+.suiji-delete svg { width:13px; height:13px; }
+.suiji-char-count { margin-left:auto; color:var(--text-secondary); font-size:10px; }
+.suiji-modal button:focus-visible { outline:2px solid var(--text-secondary); outline-offset:2px; }
+.suiji-managed-group .suiji-color { width:16px; height:16px; border:3px solid var(--bg-primary); box-shadow:0 0 0 1px var(--separator); }
+@media (max-width:480px) {
+  .suiji-footer > span { font-size:9px; }
+  .suiji-footer { gap:5px; }
+  .suiji-footer > button { padding:5px 7px; }
+  .suiji-composer.expanded .notes-editor { padding:16px 0 10px; }
+  .suiji-editor-tools time { max-width:40%; text-align:right; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .suiji-page *, .suiji-menu, .suiji-menu * { animation:none !important; transition:none !important; }
+}

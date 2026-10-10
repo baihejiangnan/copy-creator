@@ -139,7 +139,7 @@ async fn translate_ai(
     let body_text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
 
     if !status.is_success() {
-        return Err(format!("AI 翻译 HTTP {}: {}", status.as_u16(), &body_text[..body_text.len().min(80)]));
+        return Err(format!("AI 翻译 HTTP {}: {}", status.as_u16(), truncate_chars(&body_text, 80)));
     }
 
     let json: serde_json::Value = serde_json::from_str(&body_text)
@@ -208,7 +208,7 @@ async fn translate_google(
         let body = resp.text().await.map_err(|e| format!("读取 Google 响应失败: {}", e))?;
 
         if !status.is_success() {
-            return Err(format!("Google 翻译 HTTP {}: {}", status.as_u16(), &body[..body.len().min(80)]));
+            return Err(format!("Google 翻译 HTTP {}: {}", status.as_u16(), truncate_chars(&body, 80)));
         }
 
         let json: serde_json::Value = serde_json::from_str(&body)
@@ -242,7 +242,7 @@ async fn translate_google(
 
     if let Some(error) = json.get("error") {
         let msg = error["message"].as_str().unwrap_or("未知错误");
-        return Err(format!("Google 翻译错误: {}", &msg[..msg.len().min(80)]));
+        return Err(format!("Google 翻译错误: {}", truncate_chars(msg, 80)));
     }
 
     let translated = json["data"]["translations"][0]["translatedText"]
@@ -257,6 +257,12 @@ async fn translate_google(
     })
 }
 
+/// 截断错误响应正文用于提示。按**字符**而非字节截断：响应可能包含任意
+/// Unicode（中文错误说明、emoji），按字节切片会落在字符中间并 panic。
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
 fn fmt_reqwest_error(err: &reqwest::Error) -> String {
     if err.is_connect() {
         "Google 翻译连接失败，请检查代理配置".to_string()
@@ -267,4 +273,59 @@ fn fmt_reqwest_error(err: &reqwest::Error) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::truncate_chars;
+
+    #[test]
+    fn truncate_chars_never_splits_a_multibyte_character() {
+        // 90 字节 / 30 字符：按字节切第 80 字节会落在字符中间并 panic。
+        let chinese = "一".repeat(30);
+        let out = truncate_chars(&chinese, 80);
+        assert_eq!(out.chars().count(), 30);
+        assert_eq!(out, chinese);
+
+        let out = truncate_chars(&chinese, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert_eq!(out, "一".repeat(10));
+    }
+
+    #[test]
+    fn truncate_chars_counts_characters_not_bytes() {
+        // 每个 emoji 是 4 字节，12 个 emoji 共 48 字节。
+        let emoji = "🔑".repeat(12);
+        assert_eq!(emoji.len(), 48);
+        let out = truncate_chars(&emoji, 5);
+        assert_eq!(out.chars().count(), 5);
+        assert_eq!(out, "🔑".repeat(5));
+    }
+
+    #[test]
+    fn truncate_chars_keeps_ascii_behaviour_byte_identical() {
+        let ascii = "a".repeat(200);
+        assert_eq!(truncate_chars(&ascii, 80), "a".repeat(80));
+
+        // 恰好等于上限时不截断。
+        assert_eq!(truncate_chars(&ascii, 200), ascii);
+
+        // 空串与短串原样返回。
+        assert_eq!(truncate_chars("", 80), "");
+        assert_eq!(truncate_chars("short", 80), "short");
+    }
+
+    #[test]
+    fn truncate_chars_handles_mixed_width_text() {
+        // 41 组「中文」= 82 字符 / 246 字节，后面再跟 ASCII。
+        // 按字节切第 80 字节会落在某个汉字中间（80 / 3 不整除）。
+        let mixed = format!("{}sk-abc", "中文".repeat(41));
+        assert_eq!(mixed.chars().count(), 88);
+        assert_eq!(mixed.len(), 252);
+
+        let out = truncate_chars(&mixed, 80);
+        assert_eq!(out.chars().count(), 80);
+        assert_eq!(out, "中文".repeat(40));
+        // 截断后仍是合法 UTF-8（能按字符重组即证明未落在字符中间）。
+        assert_eq!(out.chars().collect::<String>(), out);
+    }
+}
 

@@ -37,10 +37,16 @@ pub fn guess_service(content: &str) -> Option<&'static str> {
     None
 }
 
+/// 生成密钥预览。按**字符**而非字节计数与切分：密钥内容可能包含任意
+/// Unicode（用户可手动把中文记录标记为 API Key），按字节切片会落在字符
+/// 中间并 panic。
 pub fn make_key_preview(content: &str) -> String {
     let c = content.trim();
-    if c.len() >= 12 {
-        format!("{}...{}", &c[..8], &c[c.len() - 4..])
+    let char_count = c.chars().count();
+    if char_count >= 12 {
+        let head: String = c.chars().take(8).collect();
+        let tail: String = c.chars().skip(char_count - 4).collect();
+        format!("{}...{}", head, tail)
     } else {
         c.to_string()
     }
@@ -660,7 +666,7 @@ fn migrate_explorer_addresses(conn: &Connection) -> rusqlite::Result<usize> {
 /// the filesystem/device honoring sync; it is not a substitute for backups.
 pub(crate) fn initialize_connection(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 5 {
+    if version > 6 {
         return Err("database schema is newer than this application".into());
     }
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -699,6 +705,14 @@ pub(crate) fn initialize_connection(conn: &mut Connection) -> Result<(), Box<dyn
         let tx = conn.transaction()?;
         crate::note_search::init_schema(&tx)?;
         tx.execute_batch("PRAGMA user_version=5;")?;
+        tx.commit()?;
+    }
+    if version < 6 {
+        let tx = conn.transaction()?;
+        crate::suiji::init_schema(&tx)?;
+        crate::note_backup::promote_phrases(&tx)?;
+        tx.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('note_shortcut_key','Ctrl+Alt+N')",[])?;
+        tx.execute_batch("PRAGMA user_version=6;")?;
         tx.commit()?;
     }
     migrate_secrets(conn)?;
@@ -1444,12 +1458,13 @@ pub fn delete_phrase_group(app: AppHandle, id: String, expected_storage_epoch: O
     let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
     require_storage_epoch(&app, expected_storage_epoch)?;
     let state = app.state::<DbState>();
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM phrases WHERE group_id = ?1", params![id])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM phrase_groups WHERE id = ?1", params![id])
-        .map_err(|e| e.to_string())?;
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e|e.to_string())?;
+    crate::note_backup::promote_phrases(&tx)?;
+    crate::suiji::delete_group(&tx, &id)?;
+    tx.commit().map_err(|e|e.to_string())?;
     let _ = crate::storage_events::emit(&app,"phrase-groups-changed", ());
+    let _ = crate::storage_events::emit(&app,"notes-changed", ());
     Ok(())
 }
 
@@ -1655,6 +1670,7 @@ pub(crate) const EXPORT_SETTING_KEYS: &[&str] = &[
     "language",
     "radial_menu_enabled",
     "shortcut_key",
+    "note_shortcut_key",
     "ai_api_url",
     "ai_model",
     "translate_proxy",
@@ -2590,7 +2606,7 @@ mod tests {
         conn.execute("INSERT INTO api_key_labels(record_id,key_preview,service,created_at,updated_at) VALUES ('kept','preview','service','now','now')", []).unwrap();
         conn.execute("UPDATE settings SET value='dark' WHERE key='theme'", []).unwrap();
         initialize_connection(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version",[],|r| r.get::<_,i64>(0)).unwrap(),5);
+        assert_eq!(conn.query_row("PRAGMA user_version",[],|r| r.get::<_,i64>(0)).unwrap(),6);
         assert_eq!(conn.query_row("PRAGMA synchronous",[],|r| r.get::<_,i64>(0)).unwrap(),2);
         assert_eq!(conn.query_row("PRAGMA foreign_keys",[],|r| r.get::<_,i64>(0)).unwrap(),1);
         assert_eq!(conn.query_row("PRAGMA cache_size",[],|r| r.get::<_,i64>(0)).unwrap(),-8000);
@@ -3055,5 +3071,49 @@ mod tests {
         assert_eq!(deleted.len(), 1); assert_eq!(deleted[0].0, "ordinary");
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get::<_, i64>(0)).unwrap(), 4);
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM api_key_labels", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn key_preview_never_splits_a_multibyte_character() {
+        // "sk-" + 6 个汉字 = 21 字节但只有 9 个字符。旧实现按字节切第 8 字节
+        // 会落在 '二' 中间并 panic（这是用户可正常触发的路径：粘贴这样一个
+        // 字符串就会让 get_clipboard_records 在持锁状态下 panic）。
+        let content = "sk-一二三四五六";
+        assert_eq!(content.len(), 21);
+        assert_eq!(content.chars().count(), 9);
+        assert!(is_api_key(content));
+        assert_eq!(make_key_preview(content), "sk-一二三四五六");
+
+        // 12 个字符以上才截断；中文按字符计，8 个头 + 4 个尾。
+        let long = "sk-中文密钥内容重复二十次";
+        assert_eq!(long.chars().count(), 14);
+        assert_eq!(make_key_preview(long), "sk-中文密钥内...复二十次");
+    }
+
+    #[test]
+    fn key_preview_keeps_ascii_behaviour_byte_identical() {
+        // ASCII 输入下字符数等于字节数，输出必须与旧实现逐字节一致。
+        assert_eq!(make_key_preview("sk-abcdefghijklmnop"), "sk-abcde...mnop");
+        assert_eq!(make_key_preview("123456789012"), "12345678...9012");
+        // 恰好 11 个字符不截断。
+        assert_eq!(make_key_preview("12345678901"), "12345678901");
+        assert_eq!(make_key_preview("short"), "short");
+        assert_eq!(make_key_preview(""), "");
+        // 两端空白先被 trim，与旧实现一致。
+        assert_eq!(make_key_preview("  spaced  "), "spaced");
+        assert_eq!(make_key_preview("AIzaSyD-1234567890abcdefghij"), "AIzaSyD-...ghij");
+    }
+
+    #[test]
+    fn key_preview_handles_emoji_and_wide_characters() {
+        // 每个 emoji 4 字节：旧实现会切出 2 个头字符 + 1 个尾字符。
+        let emoji = "🔑".repeat(12);
+        let preview = make_key_preview(&emoji);
+        assert_eq!(preview, format!("{}...{}", "🔑".repeat(8), "🔑".repeat(4)));
+
+        // 12 个字符恰好达到截断门槛。
+        assert_eq!(make_key_preview(&"中".repeat(12)), format!("{}...{}", "中".repeat(8), "中".repeat(4)));
+        // 11 个字符不截断。
+        assert_eq!(make_key_preview(&"中".repeat(11)), "中".repeat(11));
     }
 }

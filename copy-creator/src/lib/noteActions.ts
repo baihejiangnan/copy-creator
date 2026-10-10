@@ -23,9 +23,11 @@ export async function captureNote(recordId: string) {
   captures.delete(recordId); (await getNoteFeed()).invalidate();
   return result.value.note.id;
 }
-export async function changeNoteState(id: string, action: NoteAction) {
+export async function changeNoteState(id: string, action: NoteAction, expectedEpoch?: number) {
   const coordinator = await getNoteCoordinator();
+  const epoch = expectedEpoch ?? coordinator.storageEpoch;
   await saveBarrier.run("noteState", async () => {
+    if (coordinator.storageEpoch !== epoch) throw { code: "notes.storageChanged" };
     const session = coordinator.getSession(id);
     if (!session || session.revision === null) throw { code: "notes.notFound" };
     let request = states.get(id);

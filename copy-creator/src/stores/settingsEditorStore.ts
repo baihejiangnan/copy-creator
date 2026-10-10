@@ -10,7 +10,7 @@ const FIELD_PROPS = {
   clipboard_retention: "clipboardRetention", dedupe_window_seconds: "dedupeWindowSeconds",
   default_translate_engine: "defaultEngine", ai_api_url: "apiUrl", ai_api_key: "apiKey",
   ai_model: "model", google_api_key: "googleApiKey", translate_proxy: "translateProxy",
-  language: "language", shortcut_key: "shortcutKey", radial_menu_enabled: "radialMenuEnabled",
+  language: "language", shortcut_key: "shortcutKey", note_shortcut_key: "noteShortcutKey", radial_menu_enabled: "radialMenuEnabled",
   autostart: "autostartEnabled", max_history_items: "maxHistoryItems", max_storage_mb: "maxStorageMb",
   image_max_dimension: "imageMaxDimension", image_compression_quality: "imageCompressionQuality",
   large_image_handling: "largeImageHandling", clipboard_notifications: "clipboardNotifications",
@@ -153,6 +153,8 @@ export const useSettingsEditorStore = create<EditorState>((set, get) => ({
           }
         } else if (field === "shortcut_key") {
           await invokeStorage("save_shortcut", { newShortcut: value });
+        } else if (field === "note_shortcut_key") {
+          await invokeStorage("save_note_shortcut", { newShortcut: value });
         } else if (field === "radial_menu_enabled") {
           await invokeStorage("set_radial_menu_enabled", { enabled: value === "1" });
         } else if (field === "autostart") {
