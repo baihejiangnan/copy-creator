@@ -1,7 +1,7 @@
 [package]
 name = "copy-creator"
 default-run = "copy-creator"
-version = "0.2.29"
+version = "0.3.0"
 description = "PC clipboard manager, quick phrases, and translation tool"
 authors = ["Copy Creator Contributors"]
 license = "MIT"
