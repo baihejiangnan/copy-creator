@@ -1,7 +1,7 @@
 //! Signed Windows packages; paths and trust never come from the WebView.
 use crate::update_signature::{decode_signature, verify_file, MAX_UPDATE_BYTES};
 use serde::{Deserialize, Serialize};
-use std::{ffi::OsString, io::Write, path::{Path, PathBuf}, time::Duration};
+use std::{ffi::{OsStr, OsString}, io::Write, path::{Path, PathBuf}, time::Duration};
 use tauri::Manager;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -121,6 +121,19 @@ fn destination(app: &tauri::AppHandle, checked: &CheckedUpdate) -> Result<PathBu
         .join(artifact_name(&checked.version, checked.mode)?))
 }
 
+// msiexec parses PROPERTY="value with spaces", not the CRT form
+// "PROPERTY=value with spaces" produced by Command::args. Paths and values
+// below are native-owned; reject delimiters instead of accepting raw syntax.
+fn msi_quoted_value(value: &OsStr) -> Result<OsString, String> {
+    if value.to_string_lossy().contains(['"', '\0', '\r', '\n']) {
+        return Err("updates.launchError".into());
+    }
+    let mut quoted = OsString::from("\"");
+    quoted.push(value);
+    quoted.push("\"");
+    Ok(quoted)
+}
+
 fn msi_install_arguments(
     package: &Path,
     mode: &str,
@@ -134,9 +147,9 @@ fn msi_install_arguments(
     }
     let mut args = vec![
         OsString::from("/i"),
-        package.as_os_str().to_owned(),
+        msi_quoted_value(package.as_os_str())?,
         OsString::from("/norestart"),
-        OsString::from(format!("LAUNCHAPPARGS=--copy-creator-update-parent {parent_pid}")),
+        OsString::from(format!("LAUNCHAPPARGS=\"--copy-creator-update-parent {parent_pid}\"")),
     ];
     if mode == "installed" {
         // The registry marker already proved this is the installed executable.
@@ -144,7 +157,7 @@ fn msi_install_arguments(
         // cannot find an installation owned by a different installer context.
         let directory = current_exe.parent().ok_or("updates.launchError")?;
         let mut install_dir = OsString::from("INSTALLDIR=");
-        install_dir.push(directory);
+        install_dir.push(msi_quoted_value(directory.as_os_str())?);
         args.extend([OsString::from("/passive"), install_dir, OsString::from("AUTOLAUNCHAPP=1")]);
     }
     // First installation from a portable EXE retains the directory-selection
@@ -152,6 +165,23 @@ fn msi_install_arguments(
     // The MSI's launch action starts the installed executable, never
     // a newly downloaded portable EXE.
     Ok(args)
+}
+
+#[cfg(target_os = "windows")]
+fn msi_install_command(
+    program: &Path,
+    package: &Path,
+    mode: &str,
+    current_exe: &Path,
+    parent_pid: u32,
+) -> Result<std::process::Command, String> {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new(program);
+    for argument in msi_install_arguments(package, mode, current_exe, parent_pid)? {
+        command.raw_arg(argument);
+    }
+    command.creation_flags(0x08000000);
+    Ok(command)
 }
 
 pub async fn download(
@@ -277,13 +307,10 @@ pub fn launch_verified(app: &tauri::AppHandle) -> Result<(), String> {
     )?;
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         let system = std::env::var_os("SystemRoot").ok_or("updates.launchError")?;
         let exe = std::env::current_exe().map_err(|_| "updates.launchError")?;
-        let args = msi_install_arguments(&prepared.path, prepared.checked.mode, &exe, std::process::id())?;
-        std::process::Command::new(PathBuf::from(system).join("System32/msiexec.exe"))
-            .args(args)
-            .creation_flags(0x08000000)
+        msi_install_command(&PathBuf::from(system).join("System32/msiexec.exe"),
+            &prepared.path, prepared.checked.mode, &exe, std::process::id())?
             .spawn()
             .map_err(|_| "updates.launchError")?;
         Ok(())
@@ -339,20 +366,85 @@ mod tests {
             Path::new(r"D:\自定义目录\Copy Creator\copy-creator.exe"), 1234,
         ).unwrap();
         assert_eq!(args, [
-            "/i", r"C:\缓存\updates\new.msi", "/norestart",
-            "LAUNCHAPPARGS=--copy-creator-update-parent 1234", "/passive",
-            r"INSTALLDIR=D:\自定义目录\Copy Creator", "AUTOLAUNCHAPP=1",
+            "/i", r#""C:\缓存\updates\new.msi""#, "/norestart",
+            "LAUNCHAPPARGS=\"--copy-creator-update-parent 1234\"", "/passive",
+            r#"INSTALLDIR="D:\自定义目录\Copy Creator""#, "AUTOLAUNCHAPP=1",
         ].map(OsString::from));
     }
 
     #[test]
     fn portable_transition_uses_first_install_wizard_without_duplicate_launch() {
         let args = msi_install_arguments(Path::new("new.msi"), "portable", Path::new("old.exe"), 42).unwrap();
-        assert_eq!(args, ["/i", "new.msi", "/norestart", "LAUNCHAPPARGS=--copy-creator-update-parent 42"].map(OsString::from));
+        assert_eq!(args, ["/i", "\"new.msi\"", "/norestart", "LAUNCHAPPARGS=\"--copy-creator-update-parent 42\""].map(OsString::from));
         for (mode, error) in [("nsis", "updates.installerUnsupported"), ("unsupported", "updates.platformUnsupported")] {
             assert_eq!(msi_install_arguments(Path::new("new.msi"), mode, Path::new("old.exe"), 42).unwrap_err(), error);
         }
     }
+
+    #[test]
+    fn msi_values_reject_command_line_delimiters() {
+        for invalid in ["bad\"path", "bad\0path", "bad\rpath", "bad\npath"] {
+            assert_eq!(msi_quoted_value(OsStr::new(invalid)).unwrap_err(), "updates.launchError");
+            assert_eq!(msi_install_arguments(Path::new(invalid), "portable", Path::new("old.exe"), 42).unwrap_err(), "updates.launchError");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn msi_command_preserves_value_quotes_in_actual_windows_command_line() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("合成 command capture");
+        std::fs::create_dir(&directory).unwrap();
+        let program = directory.join("capture.exe");
+        let build = std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .args(["--edition=2021", "--crate-name", "windows_command_line"])
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/windows-command-line.rs"))
+            .arg("-o").arg(&program).output().unwrap();
+        assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+        for (mode, exe, expected) in [
+            ("portable", r"D:\旧便携\old.exe",
+                r#" /i "C:\合成 缓存\update.msi" /norestart LAUNCHAPPARGS="--copy-creator-update-parent 42""#),
+            ("installed", r"D:\自定义 目录\Copy Creator\old.exe",
+                r#" /i "C:\合成 缓存\update.msi" /norestart LAUNCHAPPARGS="--copy-creator-update-parent 42" /passive INSTALLDIR="D:\自定义 目录\Copy Creator" AUTOLAUNCHAPP=1"#),
+            ("installed", r"D:\old.exe",
+                r#" /i "C:\合成 缓存\update.msi" /norestart LAUNCHAPPARGS="--copy-creator-update-parent 42" /passive INSTALLDIR="D:\" AUTOLAUNCHAPP=1"#),
+        ] {
+            let output = msi_install_command(&program, Path::new(r"C:\合成 缓存\update.msi"), mode, Path::new(exe), 42)
+                .unwrap().output().unwrap();
+            assert!(output.status.success());
+            let units: Vec<u16> = serde_json::from_slice(&output.stdout).unwrap();
+            let raw = String::from_utf16(&units).unwrap();
+            assert!(raw.ends_with(expected), "{mode}: actual raw command line: {raw}");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires Windows Installer service access from the native test executable; run explicitly in isolated desktop QA"]
+    fn real_msiexec_accepts_quoted_properties_without_installing_a_package() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("合成 missing package.msi");
+        assert!(!missing.exists());
+        let system = std::env::var_os("SystemRoot").unwrap();
+        for mode in ["portable", "installed"] {
+            let mut child = msi_install_command(&PathBuf::from(&system).join("System32/msiexec.exe"),
+                &missing, mode, Path::new(r"D:\合成 目录\old.exe"), 42).unwrap()
+                .arg("/qn").spawn().unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() { break status; }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill(); let _ = child.wait();
+                    panic!("{mode}: msiexec did not reject the nonexistent synthetic package in time");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            // 1619: command line parsed, package could not be opened. The
+            // nonexistent file guarantees no installation/registry mutation.
+            assert_eq!(status.code(), Some(1619), "{mode}");
+        }
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn portable_successor_waits_for_predecessor_and_rejects_timeout() {

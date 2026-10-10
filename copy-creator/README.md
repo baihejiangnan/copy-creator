@@ -1,5 +1,7 @@
 # Copy Creator
 
+**0.2.28 / 0.2.29 已知更新问题**：应用内安装按钮可能只打开 Windows Installer 参数帮助页。请从发行页手动下载并打开 MSI，完成后启动安装目录内程序并确认版本；0.2.29 的升级器未包含本次源码修复。见[复现与验收边界](../docs/verification/2026-10-11-msi-command-line.md)。
+
 0.2.29 已按用户要求[公开为正式 Latest](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1)，包含随记整合、轮盘读取与保存握手、Key 标记校验、Windows 单实例及 P2 生命周期修复。推荐安装本版签名 MSI，旧便携客户端须手动安装一次。schema 6 / 备份 v4 升级前请先创建加密备份，不支持降回 schema 5。普通/托盘粘贴偶发失败、内存与桌面/安装验收缺口继续保留；构建、匿名六文件下载和验签范围见[发行记录](../docs/verification/2026-10-10-release-029.md)，原便签/优化 goal 保持暂停。
 
 2026-10-07：便签、共享保存与性能优化开发中，部分原生流程与容量统计对照已验证，联合验收尚未收齐；当前任务见 [TODO](../docs/TODO.md)，实测结果与限制见[验证记录](../docs/verification/2026-10-07-durability-pressure.md)。

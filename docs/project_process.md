@@ -504,3 +504,7 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
 ### 2026-10-10：0.2.29 随记修复发行
 
 用户在收到修复结果与桌面权限/粘贴残留边界后授权检查、推送和发布。由固定源码 `79922615ba9c57d488103c49d4efa774842bee1b` 干净独立构建并签名，正常推送 origin/main 与 `v0.2.29-baihejiangnan.1`，按 ID 核对六附件后[公开为正式 Latest](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1)。117 项前端、178 项 Rust（5 忽略）、类型/lint/构建、MSI 表、签名/篡改拒绝及公开匿名六文件下载/验签通过；换行洁净检查失败与同 SHA 恢复留有原日志。随记、轮盘、Key、单实例及 P2 修复纳入本版，真实桌面/MSI/UAC、偶发粘贴与性能缺口继续保留。完整字节/摘要和范围见[发行记录](verification/2026-10-10-release-029.md)，任务状态仅见 TODO。
+
+### 2026-10-11：用户报告 MSI 帮助页后修复升级参数
+
+用户实际从 0.2.28 更新 0.2.29 时只打开 Windows Installer 帮助页，后继核对确认两个公开版本均使用错误的 CRT 整体属性引用；此前数组测试和发行下载核验漏掉这一实际解析边界。原生改为 MSI 属性值引用与 raw_arg，补 Windows 原始命令行捕获和三组反向回退。前端 117、Rust 180 通过/6 默认忽略、类型/lint/build 与 QA 进程隔离通过；新增原生 Installer 服务探测返回 1601，保留显式未验收，没有放宽断言或声称安装通过。本轮仅本地源码修复，不覆盖旧发行或移动标签；已公开版本须手动 MSI 过渡。详见[复现、原失败与回归记录](verification/2026-10-11-msi-command-line.md)，后续任务见 TODO。
