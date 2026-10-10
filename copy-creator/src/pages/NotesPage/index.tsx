@@ -11,7 +11,7 @@ import "../../styles/notes.css";
 import NoteBodyEditor from "./NoteBodyEditor";
 import { useWindowVisible } from "../../lib/documentVisible";
 import { useRecordGroups } from "../../lib/useRecordGroups";
-import { organizeNote, pasteNote } from "../../lib/suiji";
+import { organizeNote, pasteNote, type RecordGroup } from "../../lib/suiji";
 import { Icons } from "../../components/Icons";
 import RecordGroupSelect from "../PhrasePage/RecordGroupSelect";
 
@@ -65,14 +65,13 @@ function NotesList({ coordinator, feed }: { coordinator: NoteCoordinator; feed: 
     </div>
   </>;
 }
-export function NoteEditor({ coordinator, id, compact = false, expanded = false, onExpand }: { coordinator: NoteCoordinator; id: string; compact?: boolean; expanded?: boolean; onExpand?: () => void }) {
+export function NoteEditor({ coordinator, id, groups, compact = false, expanded = false, onExpand }: { coordinator: NoteCoordinator; id: string; groups: RecordGroup[]; compact?: boolean; expanded?: boolean; onExpand?: () => void }) {
   const { t } = useTranslation();
   const session = useSyncExternalStore((listener) => coordinator.subscribe(id, listener), () => coordinator.getSession(id));
   const [link, setLink] = useState("");
   const [showLink, setShowLink] = useState(false);
   const [confirmation, setConfirmation] = useState<"discard" | "reload" | "delete" | null>(null);
   const [busy, setBusy] = useState(false);
-  const { groups } = useRecordGroups();
   const generation = useRef(0);
   const focusTick = useNotesWorkspace(state => state.focusTick);
   useEffect(() => () => { generation.current++; }, []);
@@ -169,12 +168,13 @@ export function NoteEditor({ coordinator, id, compact = false, expanded = false,
 }
 export default function NotesPage() {
   const { t } = useTranslation();
+  const { groups } = useRecordGroups();
   const { coordinator, feed, selectedId, opening, error, initialize } = useNotesWorkspace();
   useEffect(() => { void initialize(); }, [initialize]);
   return <div className="notes-page">
     {error && <div className="notes-error" role="alert">{t(error.code, { defaultValue: t("notes.saveFailed") })}<button onClick={() => useNotesWorkspace.getState().setError(null)}>{t("notes.dismiss")}</button></div>}
     {opening && <p role="status">{t("notes.loading")}</p>}
     {!coordinator || !feed ? <button onClick={() => { void initialize(); }}>{t("notes.retry")}</button> : selectedId
-      ? <NoteEditor key={selectedId} id={selectedId} coordinator={coordinator} /> : <NotesList coordinator={coordinator} feed={feed} />}
+      ? <NoteEditor key={selectedId} id={selectedId} coordinator={coordinator} groups={groups} /> : <NotesList coordinator={coordinator} feed={feed} />}
   </div>;
 }

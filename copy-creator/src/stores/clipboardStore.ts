@@ -3,9 +3,8 @@ import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { LatestQuery } from "../lib/latestQuery";
 import { RequestPool, trimImageCache } from "../lib/requestPool";
+import { ownEventSubscriptions } from "../lib/eventSubscriptions";
 import { invokeStorage, getStorageIdentity, onStorageIdentity, isCurrentStorageIdentity, type StorageEvent } from "../lib/storageIdentity";
-
-type UnlistenFn = () => void;
 
 export const CLIP_TYPES = ["all", "favorite", "text", "image", "link", "explorer", "file", "apikey"] as const;
 export type ClipType = (typeof CLIP_TYPES)[number];
@@ -62,7 +61,8 @@ interface ClipboardState {
   getImageData: (record: Pick<ClipboardRecord, "id" | "content">, signal?: AbortSignal) => Promise<string>;
 }
 
-let unlisten: UnlistenFn | null = null;
+let stopEvents = () => {};
+let disposed = false;
 
 const MAX_THUMBNAILS = 80;
 const MAX_FULL_IMAGES = 4;
@@ -101,43 +101,45 @@ export const useClipboardStore = create<ClipboardState>((set, get) => ({
   initialized: false,
 
   init: () => {
-    if (get().initialized) return;
+    if (disposed || get().initialized) return;
     set({ initialized: true });
 
-    listen<StorageEvent<ClipboardRecord>>("clipboard-update", ({ payload }) => { if (isCurrentStorageIdentity(payload?.storage_epoch)) get().invalidate(); }).then((fn) => { unlisten = fn; });
+    stopEvents = ownEventSubscriptions([
+      listen<StorageEvent<ClipboardRecord>>("clipboard-update", ({ payload }) => { if (isCurrentStorageIdentity(payload?.storage_epoch)) get().invalidate(); }),
 
-    listen<StorageEvent<string>>("clipboard-deleted", ({ payload }) => {
-      if (!isCurrentStorageIdentity(payload?.storage_epoch)) return;
-      const deletedId = payload.value;
-      set((state) => ({ records: state.records.filter((r) => r.id !== deletedId) }));
-      get().invalidate();
-    });
+      listen<StorageEvent<string>>("clipboard-deleted", ({ payload }) => {
+        if (!isCurrentStorageIdentity(payload?.storage_epoch)) return;
+        const deletedId = payload.value;
+        set((state) => ({ records: state.records.filter((r) => r.id !== deletedId) }));
+        get().invalidate();
+      }),
 
-    listen<StorageEvent<{ id: string; is_favorite: boolean }>>("clipboard-favorite-changed", (event) => {
-      if (!isCurrentStorageIdentity(event.payload?.storage_epoch)) return;
-      set((state) => ({
-        records: state.records.map((record) =>
-          record.id === event.payload.value.id
-            ? { ...record, is_favorite: event.payload.value.is_favorite }
-            : record,
-        ),
-      }));
-      get().invalidate();
-    });
+      listen<StorageEvent<{ id: string; is_favorite: boolean }>>("clipboard-favorite-changed", (event) => {
+        if (!isCurrentStorageIdentity(event.payload?.storage_epoch)) return;
+        set((state) => ({
+          records: state.records.map((record) =>
+            record.id === event.payload.value.id
+              ? { ...record, is_favorite: event.payload.value.is_favorite }
+              : record,
+          ),
+        }));
+        get().invalidate();
+      }),
 
-    listen<StorageEvent<{ id: string; favorite_note: string }>>("clipboard-favorite-note-changed", (event) => {
-      if (!isCurrentStorageIdentity(event.payload?.storage_epoch)) return;
-      set((state) => ({
-        records: state.records.map((record) =>
-          record.id === event.payload.value.id
-            ? { ...record, favorite_note: event.payload.value.favorite_note }
-            : record,
-        ),
-      }));
-      get().invalidate();
-    });
+      listen<StorageEvent<{ id: string; favorite_note: string }>>("clipboard-favorite-note-changed", (event) => {
+        if (!isCurrentStorageIdentity(event.payload?.storage_epoch)) return;
+        set((state) => ({
+          records: state.records.map((record) =>
+            record.id === event.payload.value.id
+              ? { ...record, favorite_note: event.payload.value.favorite_note }
+              : record,
+          ),
+        }));
+        get().invalidate();
+      }),
 
-    listen<StorageEvent<null>>("clipboard-refresh", ({ payload }) => { if (isCurrentStorageIdentity(payload?.storage_epoch)) get().invalidate(); });
+      listen<StorageEvent<null>>("clipboard-refresh", ({ payload }) => { if (isCurrentStorageIdentity(payload?.storage_epoch)) get().invalidate(); }),
+    ], console.error);
     void getStorageIdentity().catch(console.error);
   },
 
@@ -153,10 +155,10 @@ export const useClipboardStore = create<ClipboardState>((set, get) => ({
   },
 
   loadRecords: async (append = false) => {
-    if (!visible) { stale = true; return; }
-    const epoch = await getStorageIdentity().catch((error) => { console.error("Storage identity unavailable:", error); return null; });
-    if (epoch === null) return;
+    if (!visible || disposed) { stale = true; return; }
     const generation = queryGeneration;
+    const epoch = await getStorageIdentity().catch((error) => { console.error("Storage identity unavailable:", error); return null; });
+    if (epoch === null || disposed || generation !== queryGeneration) return;
     const state = get();
     if (append && (!state.hasMore || state.loading || !cursor)) return;
     const nextCursor = append ? cursor : null;
@@ -303,14 +305,19 @@ export const useClipboardStore = create<ClipboardState>((set, get) => ({
   },
 }));
 
-onStorageIdentity(() => {
+const stopIdentity = onStorageIdentity(() => {
   imageGeneration++; queryGeneration++; stale = true; cursor = null; loadedKey = null;
   useClipboardStore.setState({ records: [], thumbnailCache: {}, imageCache: {}, hasMore: true });
   if (visible) void useClipboardStore.getState().loadRecords();
 });
 
-if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", () => {
-    if (unlisten) unlisten();
-  });
+function disposeClipboardStore() {
+  if (disposed) return;
+  disposed = true;
+  visible = false;
+  imageGeneration++; queryGeneration++;
+  stopEvents(); stopIdentity();
+  if (typeof window !== "undefined") window.removeEventListener("beforeunload", disposeClipboardStore);
 }
+if (typeof window !== "undefined") window.addEventListener("beforeunload", disposeClipboardStore);
+if (import.meta.hot) import.meta.hot.dispose(disposeClipboardStore);

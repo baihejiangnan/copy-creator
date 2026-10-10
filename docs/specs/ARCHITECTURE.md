@@ -1,5 +1,7 @@
 # Copy Creator — 产品架构文档
 
+2026-10-10 生命周期续接：剪贴板 store 统一拥有五个原生监听和存储身份订阅，在 WebView unload/HMR 释放，身份读取迟到不得继续查询；普通页面卸载保持共享 store。便签编辑器 groups 由父页面提供，不创建第二组订阅。密码箱复制/填入提示共用可取消计时器并保留 epoch 守卫。自动证据及桌面权限边界见[P2 验证](../verification/2026-10-10-p2-lifetimes.md)。
+
 2026-10-10 轮盘接手：独立 WebView 使用只读 RadialNotes，通过 get_suiji_groups/list_suiji 有界读取摘要，命中前请求主窗 saveBarrier flush，匹配 requestId/epoch 后重新 get_note 并带 epoch 原生粘贴。握手 11 秒总上限，注册迟到也释放；失败不降级读取旧稿。轮盘不导入 notesWorkspace/coordinator 值依赖，事件不携带正文。原生手动 Key 标记只接受 text/link、最多 16 KiB UTF-8 原文，密文重试不重复加密。见[继续修复验证](../verification/2026-10-10-radial-notes-and-key.md)。
 
 2026-10-10 接手复核：`notesWorkspace.back()` 在等待保存后同时校验导航代次、coordinator 和选中 ID，避免旧返回回调取消正在读取的新导航。分组命令保留 lifecycle producer 许可，并在连接锁内复核/返回实际 storage epoch；适配 notes 的结构化错误为既有字符串命令错误码。存储迁移空目标判定包含 `note_group_colors`，已验证暂存凭据的重试路径保持。源码、回归与验收边界见[接手记录](../verification/2026-10-10-agent-handoff.md)。

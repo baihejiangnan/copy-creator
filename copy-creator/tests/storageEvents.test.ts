@@ -22,7 +22,7 @@ function fixture(holdReplies = false) {
     const cached = modules.get(file); if (cached) return cached;
     const exports: Record<string, unknown> = {}; modules.set(file, exports);
     const source = readFileSync(new URL(`../src/${file}.ts`, import.meta.url), "utf8");
-    const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const compiled = ts.transpileModule(source.replaceAll("import.meta.hot", "undefined"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     vm.runInNewContext(compiled, { exports, console, AbortController, setTimeout, clearTimeout, require: (name: string) => {
       if (name === "zustand") return { create: (initialize: (set: (value: object | ((state: StoreState) => object)) => void, get: () => StoreState) => StoreState) => {
         let state: StoreState;

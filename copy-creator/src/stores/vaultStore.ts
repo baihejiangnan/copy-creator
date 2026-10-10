@@ -34,6 +34,13 @@ interface VaultState {
 }
 
 export const useVaultStore = create<VaultState>((set, get) => {
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelNotice = () => { clearTimeout(noticeTimer); noticeTimer = undefined; };
+  const showNotice = (notice: string, current: number) => {
+    cancelNotice();
+    set({ notice, error: null });
+    noticeTimer = setTimeout(() => { noticeTimer = undefined; if (current === epoch) set({ notice: null }); }, 2500);
+  };
   const handleError = (error: unknown, requestEpoch: number) => {
     if (requestEpoch !== epoch) return;
     const message = String(error);
@@ -66,6 +73,7 @@ export const useVaultStore = create<VaultState>((set, get) => {
       finally { if (current === epoch) set({ busy: false }); }
     },
     clearLocked: () => {
+      cancelNotice();
       epoch++; listRequest++; detailRequest++;
       set({ status: { configured: get().status?.configured ?? true, unlocked: false, auto_lock: get().status?.auto_lock ?? "3hours" }, entries: [], selected: null, search: "", error: null, notice: null, busy: false });
     },
@@ -107,7 +115,7 @@ export const useVaultStore = create<VaultState>((set, get) => {
       } catch (error) { handleError(error, current); return false; }
       finally { if (current === epoch && request === detailRequest) set({ busy: false }); }
     },
-    clearSelected: () => { detailRequest++; set({ selected: null, busy: false, error: null, notice: null }); },
+    clearSelected: () => { cancelNotice(); detailRequest++; set({ selected: null, busy: false, error: null, notice: null }); },
     saveEntry: async (entry) => {
       const current = epoch;
       set({ busy: true, error: null });
@@ -133,21 +141,20 @@ export const useVaultStore = create<VaultState>((set, get) => {
       try {
         await invokeStorage("copy_vault_field", { id, field });
         if (current !== epoch) return;
-        set({ notice: "vault.copied", error: null });
-        setTimeout(() => { if (current === epoch) set({ notice: null }); }, 2500);
+        showNotice("vault.copied", current);
       } catch (error) { handleError(error, current); }
     },
     pasteField: async (id, field) => {
       if (get().busy || !get().status?.unlocked) return;
       const current = epoch;
+      cancelNotice();
       set({ busy: true, error: null, notice: null });
       let origin: number | undefined;
       try {
         origin = await getStorageIdentity();
         await invokeStorage("paste_vault_field", { id, field }, origin);
         if (current !== epoch) return;
-        set({ notice: "vault.pasteSent" });
-        setTimeout(() => { if (current === epoch) set({ notice: null }); }, 2500);
+        showNotice("vault.pasteSent", current);
       } catch (error) {
         if (current === epoch) handleError(error, current);
         // The vault may have timed out during a failed focus handoff.

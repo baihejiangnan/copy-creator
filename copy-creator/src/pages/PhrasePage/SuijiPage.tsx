@@ -81,7 +81,7 @@ function Workspace({ coordinator, feed }: { coordinator: NoteCoordinator; feed: 
       <button className="phrase-add-btn suiji-create" aria-label={t("suiji.create")} title={t("suiji.create")} onClick={() => useNotesWorkspace.getState().create()}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg></button>
     </div>
     {selectedId && <section className={`suiji-composer notes-page ${expanded ? "expanded" : ""}`} aria-label={t("suiji.editor")}>
-      <NoteEditor key={selectedId} id={selectedId} coordinator={coordinator} compact={selectedId === quickId} expanded={expanded} onExpand={() => {
+      <NoteEditor key={selectedId} id={selectedId} coordinator={coordinator} groups={groups} compact={selectedId === quickId} expanded={expanded} onExpand={() => {
         if (selectedId === quickId) setExpandedId(expanded ? null : selectedId);
         else setCollapsedId(expanded ? selectedId : null);
       }} />

@@ -6,14 +6,7 @@ import { useClipboardStore, type ClipType } from "../../stores/clipboardStore";
 import { Icons } from "../../components/Icons";
 import SearchInput from "../../components/SearchInput";
 import { ClipboardCard } from "./ClipboardCard";
-import { TYPE_META } from "./utils";
 import { useWindowVisible } from "../../lib/documentVisible";
-
-TYPE_META.text.icon = Icons.clipboard;
-TYPE_META.image.icon = Icons.image;
-TYPE_META.link.icon = Icons.link;
-TYPE_META.explorer.icon = Icons.link;
-TYPE_META.file.icon = Icons.file;
 
 const SCROLL_TOP_BUTTON_THRESHOLD = 180;
 
