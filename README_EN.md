@@ -53,10 +53,10 @@ Copy Creator is a lightweight Windows desktop productivity tool that appears as 
 - Configurable duplicate window (15 minutes by default), manual deduplication, and date-based bulk deletion with a count preview
 - Configurable retention period with automatic cleanup
 
-### ⚡ Quick Phrases
-- Organize common phrases and code snippets by scenario groups
-- Customizable groups for flexible content organization
-- Click to paste directly without manual copying
+### ⚡ Jot and Quick Phrases
+- Capture and edit text and code snippets with automatic saving, groups, stars, archiving and trash
+- Legacy phrases become Jot records. The radial menu reads their groups and waits for the main window to save before pasting; save failures or timeouts cancel the action
+- Repeated Windows launches activate the existing instance; native focus and repeated-paste acceptance limits are listed in the release record
 
 ### 🌐 Translation
 - **AI Translation**: Compatible with OpenAI API format, customizable endpoint and model
@@ -101,14 +101,16 @@ Included in the 0.2.26 portable release. See the [website vault guide](./docs/fe
 
 ## Download
 
-0.2.28 is published as the official Latest at the user's request, with MSI updates and the About red dot. MSI and portable EXE packages include independent signatures and metadata. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.28-baihejiangnan.1) for backup requirements and the [0.2.28 release record](./docs/verification/2026-10-10-release-028.md) for evidence and limits.
+0.2.29 is published as the official Latest at the user's request, with Jot and group integration, radial note reading and save coordination, API key validation, listener cleanup and Windows single-instance handling. MSI and portable EXE packages include independent signatures and metadata. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1) for backup requirements and the [0.2.29 release record](./docs/verification/2026-10-10-release-029.md) for evidence and limits.
 
-Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.28-baihejiangnan.1). MSI is recommended. Older 0.2.26/0.2.27 portable clients still download an EXE: install this MSI manually once, then use the installed program. Checks for higher versions from this release use the new MSI flow:
+Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1). MSI is recommended. Older 0.2.26/0.2.27 portable clients still download an EXE: install this MSI manually once, then use the installed program. Checks for higher versions from this release use the new MSI flow:
+
+Create an encrypted backup in the app before upgrading. This release uses schema 6 / backup v4 and promotes legacy phrases to Jot records; downgrading to schema 5 is unsupported.
 
 | File | Description |
 |:---|:---|
-| [Copy-Creator_0.2.28_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.28-baihejiangnan.1/Copy-Creator_0.2.28_x64.msi) | Windows x64 installer, 34.97 MB; recommended, with a directory choice for first installation |
-| [Copy-Creator-0.2.28-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.28-baihejiangnan.1/Copy-Creator-0.2.28-portable.exe) | Windows x64 portable executable, 46.68 MB; manual download, runs without installation |
+| [Copy-Creator_0.2.29_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.29-baihejiangnan.1/Copy-Creator_0.2.29_x64.msi) | Windows x64 installer, 34.11 MB; recommended, with a directory choice for first installation |
+| [Copy-Creator-0.2.29-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.29-baihejiangnan.1/Copy-Creator-0.2.29-portable.exe) | Windows x64 portable executable, 46.92 MB; manual download, runs without installation |
 
 **System Requirements**: Windows 11
 

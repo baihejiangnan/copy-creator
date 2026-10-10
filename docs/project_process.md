@@ -499,3 +499,8 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
 | 自动化 | 本地无 `.github/workflows/`；远端 Actions workflows 数量为 0，不能假设推送或打标签会自动编译发布 |
 
 历史默认：源码更新到个人仓库 `origin/main`；需要发布时在本地通过 Tauri CLI 构建 Windows 便携 EXE，再上传个人仓库 Release。历史记录不足以确认当时的具体构建命令、签名状态和全部桌面验收结果。2026-10-09 已接入公开元数据与签名下载；后续发行带该客户端的新版本时，当前执行方式见 [发布规则](features/release-rules.md)，本节仅保存历史依据。
+
+
+### 2026-10-10：0.2.29 随记修复发行
+
+用户在收到修复结果与桌面权限/粘贴残留边界后授权检查、推送和发布。由固定源码 `79922615ba9c57d488103c49d4efa774842bee1b` 干净独立构建并签名，正常推送 origin/main 与 `v0.2.29-baihejiangnan.1`，按 ID 核对六附件后[公开为正式 Latest](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1)。117 项前端、178 项 Rust（5 忽略）、类型/lint/构建、MSI 表、签名/篡改拒绝及公开匿名六文件下载/验签通过；换行洁净检查失败与同 SHA 恢复留有原日志。随记、轮盘、Key、单实例及 P2 修复纳入本版，真实桌面/MSI/UAC、偶发粘贴与性能缺口继续保留。完整字节/摘要和范围见[发行记录](verification/2026-10-10-release-029.md)，任务状态仅见 TODO。

@@ -54,10 +54,10 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 - 可主动清理历史重复记录，或按两个月、一个月、7 天、3 天及今天前的日期批量删除；执行前可查看数量并确认
 - 可设置保留时长，自动清理过期记录
 
-### ⚡ 快捷短语
-- 按场景分组管理常用话术和代码片段
-- 支持自定义分组，灵活组织内容
-- 点击即粘贴，无需手动复制
+### ⚡ 随记与快捷短语
+- 快速记录与编辑常用话术、文本和代码片段，自动保存；支持分组、星标、归档和回收站
+- 旧短语自动提升为随记，轮盘按随记分组读取；粘贴前等待主窗口保存，保存失败或超时会中止操作
+- Windows 重复启动唤起已有实例；原生焦点与连续粘贴验收边界见发行记录
 
 ### 🌐 翻译
 - **AI 翻译**：兼容 OpenAI API 格式，可自定义端点和模型
@@ -103,14 +103,16 @@ Copy Creator 是一款轻量级的 Windows 桌面效率工具，以悬浮窗形�
 
 ## 下载
 
-0.2.28 已按用户要求公开为正式 Latest，统一应用内 MSI 更新并修正关于红点，提供 MSI、便携 EXE 和独立签名元数据。普通/托盘粘贴偶发失败、内存与桌面/安装升级验收缺口继续保留。详情和备份要求见 [Release 说明](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.28-baihejiangnan.1)及 [0.2.28 发行记录](./docs/verification/2026-10-10-release-028.md)。
+0.2.29 已按用户要求公开为正式 Latest，整合随记与分组，修复轮盘随记读取、保存握手、Key 标记校验和监听生命周期，并加入 Windows 单实例，提供 MSI、便携 EXE 和独立签名元数据。普通/托盘粘贴偶发失败、内存与桌面/安装升级验收缺口继续保留。详情和备份要求见 [Release 说明](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1)及 [0.2.29 发行记录](./docs/verification/2026-10-10-release-029.md)。
 
-前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.28-baihejiangnan.1) 下载最新版本，推荐安装 MSI。旧 0.2.26/0.2.27 便携客户端仍下载 EXE，请手动安装本版 MSI 一次，之后使用已安装的程序；本版检查后续更高版本时使用新的 MSI 流程：
+前往 [本仓库 Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1) 下载最新版本，推荐安装 MSI。旧 0.2.26/0.2.27 便携客户端仍下载 EXE，请手动安装本版 MSI 一次，之后使用已安装的程序；本版检查后续更高版本时使用新的 MSI 流程：
+
+升级前请在应用中创建加密备份：本版使用 schema 6 / 备份 v4，将旧短语提升为随记；不支持降回 schema 5 旧版。
 
 | 文件 | 说明 |
 |:---|:---|
-| [Copy-Creator_0.2.28_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.28-baihejiangnan.1/Copy-Creator_0.2.28_x64.msi) | Windows x64 安装版，34.97 MB，推荐；首次安装可选择目录 |
-| [Copy-Creator-0.2.28-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.28-baihejiangnan.1/Copy-Creator-0.2.28-portable.exe) | Windows x64 便携版，46.68 MB，手动下载后直接运行，无需安装 |
+| [Copy-Creator_0.2.29_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.29-baihejiangnan.1/Copy-Creator_0.2.29_x64.msi) | Windows x64 安装版，34.11 MB，推荐；首次安装可选择目录 |
+| [Copy-Creator-0.2.29-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.29-baihejiangnan.1/Copy-Creator-0.2.29-portable.exe) | Windows x64 便携版，46.92 MB，手动下载后直接运行，无需安装 |
 
 **系统要求**：Windows 11
 

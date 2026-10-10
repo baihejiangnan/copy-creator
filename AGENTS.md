@@ -59,7 +59,7 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | 备份格式、容量边界、兼容、导入事务和恢复规则 | [加密备份与恢复](docs/features/encrypted-backup.md) |
 | 密码箱、主密码、权限、复制/填入与资料保护 | [网站资料功能说明](docs/features/website-vault.md) |
 | 更新检查、启动行为、MSI 升级及两个入口/安装后启动验收 | [更新说明](docs/features/updates.md) |
-| 推送规则：提交、远端更新、版本号、便携构建和 GitHub Release 发布 | [推送规则（含构建与 Release 发布）](docs/features/release-rules.md) |
+| 推送规则：提交、远端更新、版本号、便携构建和 GitHub Release 发布 | [推送规则（含构建与 Release 发布）](docs/features/release-rules.md)；[0.2.29 发行验证](docs/verification/2026-10-10-release-029.md) |
 | 已执行检查的环境、结果和剩余验证边界 | [验证记录](docs/verification/)；优先读取 TODO 相关条目链接的记录；本轮入口为[轮盘随记与 Key 验证](docs/verification/2026-10-10-radial-notes-and-key.md) |
 | 监听清理、提示计时器与编辑器分组复用的自动/反向验证及桌面环境边界 | [P2 生命周期验证](docs/verification/2026-10-10-p2-lifetimes.md) |
 | 代码评审发现的缺陷、风险、死代码与建议修复顺序 | [代码修复清单](docs/reviews/2026-10-10-code-fix-list.md)；修复前先按清单核对行号是否仍有效 |
