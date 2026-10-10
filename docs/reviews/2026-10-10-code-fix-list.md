@@ -144,7 +144,7 @@
 
 ---
 
-### P1-8 MSI 升级只打开 Windows Installer 参数帮助页 —— 源码修复，尚未发行/安装验收
+### P1-8 MSI 升级只打开 Windows Installer 参数帮助页 —— 已随 0.3.0 发行，实际安装验收待补
 
 2026-10-11 根据用户的 0.2.28 → 0.2.29 实际反馈补查：两标签的 `update_package.rs` 无差异，旧 `Command::args` 把含空格的整个 MSI 属性作为 CRT 参数加引号，Windows Installer 要求只引用 `PROPERTY="value"` 的值。之前数组断言漏掉真实命令行编码。当前源码改为受限原生值编码与 `raw_arg`；完整 Windows 命令行捕获及三组反向回退已补。PowerShell 不存在包探测正常到达 1619，但原生测试进程的 Installer 服务访问返回 1601，未当作通过。源码与测试定位、原失败日志及完整边界见[专项验证](../verification/2026-10-11-msi-command-line.md)，任务状态统一见 TODO 的 U-01/当前接手顺序。
 

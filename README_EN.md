@@ -101,18 +101,18 @@ Included in the 0.2.26 portable release. See the [website vault guide](./docs/fe
 
 ## Download
 
-**Update issue in 0.2.28 / 0.2.29:** Save and exit to install may open only the Windows Installer command-line help dialog. Download the MSI below manually, complete installation, and launch the installed program to confirm its version. The updater in 0.2.29 still contains this defect. See the [MSI command-line record](./docs/verification/2026-10-11-msi-command-line.md) for the source fix and verification limits.
+**Update issue in 0.2.28 / 0.2.29:** The old updater may open only the Windows Installer command-line help dialog and requires a one-time manual transition. Download the MSI below, complete installation, and launch the installed program to confirm version 0.3.0. See the [MSI command-line record](./docs/verification/2026-10-11-msi-command-line.md) for the source fix and verification limits.
 
-0.2.29 is published as the official Latest at the user's request, with Jot and group integration, radial note reading and save coordination, API key validation, listener cleanup and Windows single-instance handling. MSI and portable EXE packages include independent signatures and metadata. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1) for backup requirements and the [0.2.29 release record](./docs/verification/2026-10-10-release-029.md) for evidence and limits.
+0.3.0 is published as the official Latest at the user's request, fixing MSI property quoting that opened Installer help, with Jot and group integration, radial note reading and save coordination, API key validation, listener cleanup and Windows single-instance handling. MSI and portable EXE packages include independent signatures and metadata. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.3.0-baihejiangnan.1) for backup requirements and the [0.3.0 release record](./docs/verification/2026-10-11-release-030.md) for evidence and limits.
 
-Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.2.29-baihejiangnan.1). MSI is recommended. Older 0.2.26/0.2.27 portable clients still download an EXE: install this MSI manually once, then use the installed program. Checks for higher versions from this release use the new MSI flow:
+Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.3.0-baihejiangnan.1). MSI is recommended. Older 0.2.26/0.2.27 portable clients still download an EXE: install this MSI manually once, then use the installed program. Checks for higher versions from this release use the new MSI flow:
 
 Create an encrypted backup in the app before upgrading. This release uses schema 6 / backup v4 and promotes legacy phrases to Jot records; downgrading to schema 5 is unsupported.
 
 | File | Description |
 |:---|:---|
-| [Copy-Creator_0.2.29_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.29-baihejiangnan.1/Copy-Creator_0.2.29_x64.msi) | Windows x64 installer, 34.11 MB; recommended, with a directory choice for first installation |
-| [Copy-Creator-0.2.29-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.2.29-baihejiangnan.1/Copy-Creator-0.2.29-portable.exe) | Windows x64 portable executable, 46.92 MB; manual download, runs without installation |
+| [Copy-Creator_0.3.0_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.3.0-baihejiangnan.1/Copy-Creator_0.3.0_x64.msi) | Windows x64 installer, 34.12 MB; recommended, with a directory choice for first installation |
+| [Copy-Creator-0.3.0-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.3.0-baihejiangnan.1/Copy-Creator-0.3.0-portable.exe) | Windows x64 portable executable, 46.94 MB; manual download, runs without installation |
 
 **System Requirements**: Windows 11
 

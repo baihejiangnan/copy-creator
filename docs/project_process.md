@@ -508,3 +508,7 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
 ### 2026-10-11：用户报告 MSI 帮助页后修复升级参数
 
 用户实际从 0.2.28 更新 0.2.29 时只打开 Windows Installer 帮助页，后继核对确认两个公开版本均使用错误的 CRT 整体属性引用；此前数组测试和发行下载核验漏掉这一实际解析边界。原生改为 MSI 属性值引用与 raw_arg，补 Windows 原始命令行捕获和三组反向回退。前端 117、Rust 180 通过/6 默认忽略、类型/lint/build 与 QA 进程隔离通过；新增原生 Installer 服务探测返回 1601，保留显式未验收，没有放宽断言或声称安装通过。本轮仅本地源码修复，不覆盖旧发行或移动标签；已公开版本须手动 MSI 过渡。详见[复现、原失败与回归记录](verification/2026-10-11-msi-command-line.md)，后续任务见 TODO。
+
+### 2026-10-11：0.3.0 推送与签名发行
+
+用户明确指定版本 0.3.0 并授权推送、更新与发布。由干净固定提交 `f56fb1e5c9f0ceaebe1103dc57d4296d6d7c6606` 构建 MSI 和同次便携 EXE，附注标签 `v0.3.0-baihejiangnan.1` 已推送，[Release](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.3.0-baihejiangnan.1) 已公开为正式 Latest。前端 117、Rust 180 通过/6 默认忽略、类型/lint/生产构建、MSI 表与签名/篡改拒绝通过；公开六附件匿名独立下载、摘要及可信源码验证器验签通过。MSI 参数修复纳入本版，旧 0.2.28/0.2.29 须手动安装一次；真实安装/UAC、偶发粘贴与既有性能边界不变。完整来源、字节与摘要见[发行记录](verification/2026-10-11-release-030.md)，任务状态仅见 TODO。

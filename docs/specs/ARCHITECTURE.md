@@ -360,7 +360,7 @@ src/
 | 开发调试       | Vite + Tauri CLI     | `pnpm tauri dev`   |
 | Windows 打包 | Tauri Bundler → .msi | `pnpm tauri build` |
 | macOS 打包   | Tauri Bundler → .dmg | `pnpm tauri build` |
-| 检查与签名更新 | 自定义 Tauri commands、reqwest、minisign-verify、Windows Installer | GitHub Latest 的公开元数据，两种运行模式均下载签名 MSI，统一保存后调用系统 msiexec；原生按 MSI 语法只引用属性值，以 raw_arg 传入并拒绝命令分隔符，避免 CRT 整体引用。安装版保留目录并显示进度，便携版首次显示向导；主窗口共享新版红点。0.2.28/0.2.29 仍含旧引号缺陷，修复待发行与安装验收；见 [更新说明](../features/updates.md) |
+| 检查与签名更新 | 自定义 Tauri commands、reqwest、minisign-verify、Windows Installer | GitHub Latest 的公开元数据，两种运行模式均下载签名 MSI，统一保存后调用系统 msiexec；原生按 MSI 语法只引用属性值，以 raw_arg 传入并拒绝命令分隔符，避免 CRT 整体引用。安装版保留目录并显示进度，便携版首次显示向导；主窗口共享新版红点。0.2.28/0.2.29 仍含旧引号缺陷，修复已随 0.3.0 发行，实际安装验收待补；见 [更新说明](../features/updates.md) |
 
 体积按前端发布内容、Rust Release EXE、便携包/安装包分别报告。当前前端构建与发布集合实验见 [优化方案 §2](../features/performance-design.md)；现用 5 个字体保留，37 个未引用字体已移至 `assets-source/fonts/`，前端产物减少 51,515,212 字节。WOFF2 与 strip/LTO/依赖 features 按真实产物和视觉/性能回归决定。构建成功不能替代运行测量；尚未改变 Cargo release profile/Vite 分包配置。
 
