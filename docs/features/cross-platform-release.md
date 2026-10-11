@@ -1,6 +1,6 @@
 # macOS / Linux Release 准备
 
-本轮范围是构建与发布准备，不是平台移植完成或公开授权。Windows 0.3.0 的已发布文件和更新元数据保持既有合同；macOS / Linux 尚不满足**当前承诺范围**的正式发行条件，缩减范围的基础测试包可先行验证，但尚不具备面向用户的公开分发条件。任务状态只维护在 [TODO](../TODO.md)。
+本轮范围是构建与发布准备，不是平台移植完成或公开授权。用户已确认 Windows、macOS、Linux 三端功能必须完整一致，仅允许 macOS/Linux 单实例保护暂缓；不能通过缩减功能范围或保留 `unsupported` 分支视为完成。实现可采用各系统原生协议与权限流程，面向用户的功能、资料保护和保存恢复要求须一致。Windows 0.3.0 的已发布文件和更新元数据保持既有合同；现有验证包可先开展基础测试，但 macOS/Linux 尚不具备公开分发条件。任务状态只维护在 [TODO](../TODO.md)。
 
 ## 构建目标与入口
 
@@ -36,12 +36,12 @@ Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runne
 | 普通粘贴 | Linux X11 加入 Ctrl+V；macOS Cmd+V 改为失败时也释放修饰键，不盲目重发 V。非 Windows 置顶窗口或窗口仍持有焦点时拒绝；Linux Wayland 会话明确失败，可手动粘贴已复制的普通内容 | 外部目标捕获/身份/焦点确认、手势修饰键释放、macOS 辅助功能授权/拒绝恢复及原生 Wayland 路径尚待实现/桌面验收，不以发键成功认定插入成功 |
 | 文件引用/文件复制 | macOS Finder `open -R` 定位；Linux FileManager1 `ShowItems`，不支持时打开父目录。无 shell 拼接；子进程有超时、失败检查及回收 | 系统文件管理器实际行为待验；非 Windows 文件复制仍退化为路径文本，原生文件剪贴板格式尚未实现，不得误删外部文件 |
 | 链接打开 | 保留原协议限制，macOS `open` / Linux `xdg-open` 经有界后台 worker 打开，失败返回固定错误，不打印用户 URL 或系统原始错误 | 默认浏览器实际打开/失败/超时待实机验收 |
-| 窗口与单实例 | 非 Windows 关闭主窗改为隐藏到托盘，保留统一保存交接；Windows 路径保持 | 非 Windows 单实例、失焦自动隐藏、主窗/轮盘焦点、托盘/重启与开机启动仍待平台实现或验收 |
-| 应用内更新 | 非 Windows mode=`unsupported`，现有 MSI 合同保持 | 首轮明确手动安装/更新；若后续加入自动更新，另实现平台选择、签名、安装和保存交接 |
+| 窗口与单实例 | 非 Windows 关闭主窗改为隐藏到托盘，保留统一保存交接；Windows 路径保持 | 失焦自动隐藏、主窗/轮盘焦点、托盘/重启与开机启动仍须平台实现或验收；仅非 Windows 单实例保护按用户决定暂缓，不能标为已实现 |
+| 应用内更新 | 非 Windows mode=`unsupported`，现有 MSI 合同保持 | 先前首轮手动安装/更新的方案已由三端功能完整一致要求取代；须补平台选择、签名下载验证、安装和保存交接，手动下载仅作为退路，不能代替应用内更新完成 |
 
-本轮不是完整移植。下列限制阻塞**按当前功能承诺的完整正式发行**；若明确缩减预览范围（例如 Linux 只发 DEB、暂不提供私密复制），部分项目可暂不覆盖，但安全保护、启动与数据可靠性仍须验证，且缩减后的范围必须对用户可见，不能把未实现功能说成已支持。按包判断：AppImage 运行问题只阻塞 AppImage；DEB 无此依赖，但仍有自身未验证项（安装/卸载、桌面入口、托盘、WebKitGTK）。不关闭失败测试、不降级为明文，也不把保护性拒绝或未运行的原生分支记为验收完成。
+本轮不是完整移植。除用户允许暂缓的非 Windows 单实例保护外，上述功能差距仍阻塞三端功能完整一致的正式发行；基础测试可以分批开展，但不能以暂不提供私密复制、原生文件格式、轮盘或应用内更新等方式完成本轮要求。按包判断：AppImage 运行问题只阻塞 AppImage；DEB 无此依赖，但仍有自身未验证项（安装/卸载、桌面入口、托盘、WebKitGTK），包间差异不免除三端功能要求。不关闭失败测试、不降级为明文，也不把保护性拒绝或未运行的原生分支记为验收完成。
 
-安全与可靠性不因缩减范围而免除验证：系统密钥保护的持久化与缺失/锁定/拒绝行为、保存屏障与草稿恢复、退出重启后的数据保持、加密备份的导入与回滚，属于任何预览范围都必须先验证的部分。
+安全与可靠性不因单实例暂缓而免除验证：系统密钥保护的持久化与缺失/锁定/拒绝行为、保存屏障与草稿恢复、退出重启后的数据保持、加密备份的导入与回滚仍须验证，包括允许多进程启动时的数据可靠性边界。
 
 ## 签名与正式发布材料
 
@@ -67,19 +67,19 @@ Windows 的六文件发行规则仍只适用于 Windows。联合发行需先扩�
 
 现有四个验证包可直接用于基础测试，不必等证书或未实现功能：安装/载入、启动、托盘、普通文本复制粘贴、保存与重启后数据保持、系统密钥服务读写属于第一批范围；已知未实现项（私密复制、Linux 原生事件、原生文件格式、单实例/焦点、轮盘手势）保持待验，不计入基础结论。
 
-这些包使用正式 identifier `com.copycreator.app`，会与已安装的正式版共用数据目录、单实例锁与系统密钥条目。测试 MUST 在干净测试系统或专用测试账户中进行，只用合成夹具，且在测试前确认该环境没有需要保留的用户资料；否则改用隔离 identifier 构建 QA 包。
+这些包使用正式 identifier `com.copycreator.app`，在同一账户中会与正式版共用默认数据目录及 macOS/Linux 系统密钥条目；现有单实例锁只在 Windows 启用，macOS/Linux 尚无对应门闸。测试 MUST 只用合成夹具，并在开始前确认没有需要保留的用户资料。实际安装应使用干净测试系统/虚拟机，或先核对安装身份无冲突；专用测试账户能隔离账户资料，但不能隔离共享的 `/Applications` 安装位置或系统级 DEB 安装。
 
-隔离 QA 包的做法沿用既有 Windows 实验模式：用 `tauri build --config <qa>.json` 覆盖 `identifier`（例如 `com.copycreator.qa<日期>`），其余配置不变。下列隔离点已在源码实现，构建 QA 包前应逐项确认仍然成立：
+隔离 QA 包可沿用既有 Windows 实验模式，用 `tauri build --config <qa>.json` 覆盖 `identifier`（例如 `com.copycreator.qa<日期>`）作为数据身份隔离的起点。安装隔离还须逐平台核对产物：macOS 的 `.app` 名称与安装位置，Linux 的 DEB 包名、可执行文件路径、桌面入口与图标路径。仅改 identifier 或产品名不能视为已完成这些检查。下表列出已有源码机制及其适用范围；macOS/Linux 的实际系统集成隔离仍待桌面验证：
 
 | 隔离点 | 位置 | 行为 |
 | --- | --- | --- |
-| 系统密钥条目 | `secrets_portable.rs` | 服务名 `{identifier}.local-secrets.v1`，AAD 与密文均绑定 identifier，QA 与正式版密钥互不可解 |
+| 系统密钥条目（macOS/Linux） | `secrets_portable.rs` | 服务名 `{identifier}.local-secrets.v1`，密文认证的 AAD 绑定 identifier；Windows 使用用户范围的 DPAPI，不适用此条目隔离机制 |
 | 粘贴图片目录 | `paste.rs` | 非 `com.copycreator.app` 写入 `copy_creator_paste_instances/<identifier 摘要>`，不进入正式版清理树 |
-| 开机启动项 | `lib.rs` | 非正式 identifier 注册为 `Copy Creator (<identifier>)`，不会改写正式版启动项 |
-| 单实例锁 | `single_instance.rs` | 锁名取自 `hash(SID + identifier)`，QA 实例与正式版可并存且互不唤醒 |
+| 开机启动项 | `lib.rs` | 非正式 identifier 传入插件的名称为 `<应用名> (<identifier>)`；macOS/Linux 实际注册、开关及清理仍待验证 |
+| 单实例锁（仅 Windows） | `single_instance.rs` | 锁名取自 SID 与 identifier 的摘要，并由 Local 命名空间区分登录会话；macOS/Linux 尚未实现对应保护 |
 | 加速清理时钟 | `maintenance.rs` | 仅 `diagnostics` feature + 非正式 identifier 生效，正式标识与普通构建固定为生产间隔 |
 
-QA 包同样使用 ad-hoc/无签名，测试授权方式与验证包一致；它只用于隔离测试，NOT 用于分发。
+系统剪贴板、全局快捷键与系统权限不会因 identifier 改变而自动隔离；受控测试须保留授权与恢复证据，并核对测试后进程及系统状态。QA 包同样使用 ad-hoc/无签名，测试授权方式与验证包一致；它只用于隔离测试，NOT 用于分发。
 
 本轮已执行：actionlint 1.7.12 工作流检查通过（下载文件与上游 SHA-256 清单一致；Windows 上未执行 ShellCheck）；Git Bash `bash -n` 对全部 11 个 run 块语法检查通过；YAML 的手动触发/只读权限/三目标矩阵检查、受影响文档相对文件链接检查、`git diff --check` 通过。这些是此前准备轮的静态证据；本轮源码变更与自动回归结果见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)，不将 Windows 回归记为 macOS/Linux 构建通过。
 

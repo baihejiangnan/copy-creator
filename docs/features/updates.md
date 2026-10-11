@@ -1,6 +1,6 @@
 # 关于与检查更新
 
-macOS / Linux 当前处于[构建与发行准备](cross-platform-release.md)，原生更新模式仍为 `unsupported`，首轮准备按手动分发设计；现有签名 MSI 与六文件元数据合同仍专用于 Windows。平台包与桌面验收未完成，准备工作流不会覆盖 `latest.json` 或自动公开 Release。
+macOS / Linux 当前处于[构建与发行准备](cross-platform-release.md)，原生更新模式仍为 `unsupported`。用户已确认三端功能必须完整一致，仅单实例保护可暂缓，因此先前首轮手动更新方案不再满足完成条件：macOS/Linux 仍须补齐应用内检查、平台包选择、签名下载验证、保存退出与安装交接，并验收失败恢复；手动下载仅保留为退路。现有签名 MSI 与六文件元数据合同仍专用于 Windows，扩展时须保留两个既有 Windows 平台条目。平台包与桌面验收未完成，准备工作流不会覆盖 `latest.json` 或自动公开 Release。
 
 **已知问题（0.2.28 / 0.2.29）**：点击“保存并退出，安装新版”可能仅打开 Windows Installer 参数帮助页，未完成升级。两个公开版本均含 MSI 属性引号错误；修复已随 0.3.0 发行；实际安装/UAC 联合验收仍待完成。旧客户端须从发布页手动下载并打开 MSI 过渡；关闭帮助页不代表更新成功。根因、合成解析证据和待验收范围见[MSI 命令行修复](../verification/2026-10-11-msi-command-line.md)。
 
