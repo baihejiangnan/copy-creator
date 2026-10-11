@@ -959,7 +959,7 @@ fn send_paste_chord(mut send: impl FnMut(Key, Direction) -> Result<(), ()>, modi
     let pressed = send(modifier, Direction::Press);
     let pasted = pressed.and_then(|()| {
         thread::sleep(Duration::from_millis(30));
-        send(Key::V, Direction::Click)
+        send(Key::Unicode('v'), Direction::Click)
     });
     // Always attempt release, including a failed press/click. Never retry V.
     let released = send(modifier, Direction::Release);
@@ -979,7 +979,7 @@ mod portable_chord_tests {
             }, Key::Control);
             assert!(result.is_err());
             assert!(matches!(calls.last(), Some((Key::Control, Direction::Release))));
-            assert!(calls.iter().filter(|(key, _)| matches!(key, Key::V)).count() <= 1);
+            assert!(calls.iter().filter(|(key, _)| matches!(key, Key::Unicode('v'))).count() <= 1);
         }
     }
 }

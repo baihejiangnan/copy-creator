@@ -2,7 +2,7 @@
 
 ## 来源与范围
 
-基线为 `main` 的 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`，本轮源码和此前发布准备文档均在工作区，未提交、推送、打标签或发布。应用版本仍为 0.3.0，schema 6、备份 v4 和 Windows 更新信任/六文件合同保持。设计和未完成项分别见[跨平台准备](../features/cross-platform-release.md)与 [TODO](../TODO.md)。
+基线为 `main` 的 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮修复已在用户授权后提交并推送至 `origin/main`，源码 SHA 为 `4cf3965f1384b442f8f7a5276c537e796c2517e8`；已启动[首次手动 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38108284062)，`build_packages=false`。未打标签或发布。应用版本仍为 0.3.0，schema 6、备份 v4 和 Windows 更新信任/六文件合同保持。设计和未完成项分别见[跨平台准备](../features/cross-platform-release.md)与 [TODO](../TODO.md)。
 
 本轮处理系统密钥保护、受保护前缀在清理/备份/便签中的一致性、初步剪贴板采集与普通粘贴、私密复制保护性拒绝、非 Windows 链接/文件定位及关闭到托盘。系统测试与正式打包尚未发生；新平台原生代码存在不等于平台构建或验收通过。
 
@@ -36,7 +36,9 @@
 
 本机安装的 WSL 仅列出 `docker-desktop`，不视为 Linux 桌面环境。`docker desktop start --detach` 返回启动请求已发出，但之后仍无法连接 `dockerDesktopLinuxEngine`，没有可运行的 Linux 容器；已停止重复启动尝试。只在 `output/cross-platform-prep/linux-source` 暂存应用 Rust 源码/配置与前端 dist，未挂载用户 AppData、数据库或密钥。
 
-没有执行 GitHub CI、macOS/Linux 原生编译、实际系统钥匙串读写、辅助功能权限、X11/Wayland、浏览器/文件管理器、托盘/关闭/焦点/重启或系统剪贴板桌面验证。没有启动 QA 应用或改变系统剪贴板；不把旧桌面报告作为这批新分支的证据。
+首次 GitHub CI 的前端检查通过；macOS ARM 与 Linux 原生编译暴露 `enigo::Key::V` 仅 Windows 存在，macOS 另暴露透明窗口缺少 `macos-private-api`。改为跨平台 `Key::Unicode('v')`，并配对启用 Tauri feature 与 `app.macOSPrivateApi`，保留透明界面。Windows 普通粘贴仍使用原来的 Windows 路径。后续 CI 结果在本记录收尾补齐。
+
+没有执行实际系统钥匙串读写、辅助功能权限、X11/Wayland、浏览器/文件管理器、托盘/关闭/焦点/重启或系统剪贴板桌面验证。没有启动 QA 应用或改变系统剪贴板；不把旧桌面报告作为这批新分支的证据。
 
 已知功能缺口仍包括 Linux 相同内容重复制与原生事件、私密剪贴板归属/到期清除/私密填入、原生文件剪贴板格式、非 Windows 单实例与焦点保护、轮盘手势及平台签名/安装/桌面验收。当前非 Windows 私密复制返回明确错误，普通 Linux Wayland 自动粘贴及非 Windows 置顶面板自动粘贴被拒绝；这些保护性限制不算功能验收。Linux 图片轮询成本、系统密钥服务 RPC 耗时及插件图片解码预分配上限仍需测量/修正。
 

@@ -16,13 +16,13 @@ Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runne
 
 工具版本参照当前 Windows 开发环境固定为 Node 24.19.0、pnpm 11.7.0、Rust 1.98.1；JS/Cargo 依赖使用现有锁文件，第三方 Actions 固定提交。前端类型、单测、lint 成功后，各原生平台独立执行前端生产构建与 `cargo test --locked`；矩阵一项失败不取消其他平台。本轮已处理确认的 DPAPI 无条件引用阻塞；尚未实际运行三个原生目标，其他编译缺口由 CI 继续暴露，不允许忽略失败后上传安装包。
 
-工作流需先按本次授权提交/推送到仓库默认分支，才可从 Actions 页面选择 **macOS and Linux readiness → Run workflow**。首次保持 `build_packages=false`，保存每个平台实际编译错误；修复后再启用打包。本文没有执行远端推送或触发 CI。
+工作流已按本次授权提交/推送到 `origin/main`，可从 Actions 页面选择 **macOS and Linux readiness → Run workflow**。首次保持 `build_packages=false`，保存每个平台实际编译错误；原生验证通过后再启用打包。实际来源与 CI 结果见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
 
 成功打包的 artifact 名含 target 与完整 SHA，保留 14 天，仅含 DMG/DEB/AppImage、`SOURCE_COMMIT.txt`、`BUILD_INFO.txt` 和 `SHA256SUMS.txt`。上传目录保留包子目录，校验命令从 bundle 根执行 `shasum -a 256 -c SHA256SUMS.txt`；`.app` 位于 DMG 内，不单独上传以免 ZIP 破坏链接/权限。`validationOnly=true` 包不用于正式分发，原生测试和打包成功也不等于桌面验收通过。
 
 ## 当前源码差距
 
-基线源码为 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。本轮修复在工作区，未提交/推送；Windows 自动回归通过，macOS/Linux 实际编译和桌面结果仍为空，详见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
+基线源码为 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮修复提交为 `4cf3965f1384b442f8f7a5276c537e796c2517e8`，已推送并运行原生 CI；Windows 自动回归通过。各轮编译修复、CI 与桌面验证边界详见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
 
 | 范围 | 本轮实现 | 剩余要求 |
 | --- | --- | --- |
@@ -40,6 +40,8 @@ Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runne
 本轮不是完整移植。上述限制继续阻塞正式 macOS/Linux 发行；不关闭失败测试、不降级为明文，也不把保护性拒绝或未运行的原生分支记为验收完成。
 
 ## 签名与正式发布材料
+
+当前锁定的 Tauri 2.11.1 需要配对启用 `macos-private-api` feature 与 `app.macOSPrivateApi` 才能保留主窗/轮盘透明背景；该配置不提供 Apple 签名或公证，当前采用独立 DMG 分发路线，未准备 Mac App Store 上架。
 
 macOS 验证包使用 `APPLE_SIGNING_IDENTITY=-` 的 ad-hoc 签名，仅用于开发验证。正式分发准备 Apple Developer 的 Developer ID Application 证书（P12）、证书密码、签名 identity，以及 notarization 凭据。Apple ID 方式使用 `APPLE_ID`、应用专用 `APPLE_PASSWORD`、`APPLE_TEAM_ID`；也可改用 App Store Connect 的 `APPLE_API_ISSUER`、`APPLE_API_KEY`、`APPLE_API_KEY_PATH`。凭据通过受控 CI secrets/临时文件提供，不进入仓库、artifact 或日志；本准备工作流尚未接入这些凭据。正式包需验证 codesign、notarization/stapling 与下载后 Gatekeeper 行为，不把 ad-hoc 或 Tauri 更新签名当作 Apple 公证。
 
