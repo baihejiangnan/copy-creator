@@ -12,7 +12,11 @@ struct FocusState {
 }
 
 fn hides(state: &FocusState) -> (bool, bool) {
-    if state.main_focused || state.radial_focused || state.dialog || state.cursor_inside {
+    if state.main_focused
+        || state.radial_focused
+        || state.dialog
+        || (state.main_visible && state.cursor_inside)
+    {
         return (false, false);
     }
     (
@@ -142,5 +146,14 @@ mod tests {
         state.main_visible = false;
         state.radial_visible = false;
         assert_eq!(hides(&state), (false, false));
+    }
+    #[test]
+    fn invisible_main_bounds_do_not_keep_an_unfocused_radial_open() {
+        let state = FocusState {
+            radial_visible: true,
+            cursor_inside: true,
+            ..Default::default()
+        };
+        assert_eq!(hides(&state), (false, true));
     }
 }
