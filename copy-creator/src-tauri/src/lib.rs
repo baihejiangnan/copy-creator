@@ -1,4 +1,6 @@
 mod clipboard;
+#[cfg(any(not(target_os = "windows"), test))]
+mod clipboard_files;
 mod clipboard_wake;
 #[cfg(not(target_os = "windows"))]
 mod desktop_open;

@@ -103,6 +103,14 @@ jobs:
           else
             cargo test --locked --manifest-path src-tauri/Cargo.toml --target "$BUILD_TARGET"
           fi
+      - name: Isolated Linux native file clipboard and recopy test
+        if: runner.os == 'Linux'
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          xvfb-run -a cargo test --locked --manifest-path src-tauri/Cargo.toml --target "$BUILD_TARGET" \
+            --lib clipboard_files::linux::tests::native_file_formats_and_identical_recopy \
+            -- --ignored --exact --test-threads=1
       - name: Build validation packages
         if: inputs.build_packages
         env:

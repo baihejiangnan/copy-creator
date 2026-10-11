@@ -1145,32 +1145,47 @@ struct PortableSnapshot {
     key: PortableSnapshotKey,
     text: Option<(String, bool)>,
     image: Option<(Vec<u8>, u32, u32)>,
+    files: Option<Vec<String>>,
 }
 
 #[cfg(any(not(target_os = "windows"), test))]
-fn snapshot_digest(text: Option<&str>, image: Option<(&[u8], u32, u32)>) -> [u8; 32] {
+fn snapshot_digest(text: Option<&str>, image: Option<(&[u8], u32, u32)>, files: Option<&[String]>) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
     if let Some(text) = text { hash.update([1]); hash.update((text.len() as u64).to_le_bytes()); hash.update(text.as_bytes()); }
     if let Some((rgba, width, height)) = image { hash.update([2]); hash.update(width.to_le_bytes()); hash.update(height.to_le_bytes()); hash.update(rgba); }
+    if let Some(files) = files {
+        hash.update([3]);
+        hash.update((files.len() as u64).to_le_bytes());
+        for path in files { hash.update((path.len() as u64).to_le_bytes()); hash.update(path.as_bytes()); }
+    }
     hash.finalize().into()
 }
 
 #[cfg(not(target_os = "windows"))]
-fn read_portable_snapshot(handle: &AppHandle) -> Option<PortableSnapshot> {
+fn portable_generation() -> Option<isize> {
     #[cfg(target_os = "macos")]
-    let generation = Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount());
-    #[cfg(not(target_os = "macos"))]
-    let generation = None;
-    // macOS can detect identical content copied again without decoding images
-    // every watchdog tick. Linux currently uses bounded content polling.
+    { Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount()) }
+    #[cfg(target_os = "linux")]
+    { crate::clipboard_wake::generation() }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    { None }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_portable_snapshot(handle: &AppHandle) -> Option<PortableSnapshot> {
+    let generation = portable_generation();
+    // Skip decoding when the native change counter is unchanged. A content
+    // fingerprint remains the fallback if native notifications are unavailable.
     if generation.is_some() && LAST_PORTABLE_SNAPSHOT.lock().unwrap().as_ref().is_some_and(|key| key.1 == generation) {
         return None;
     }
-    let text = read_clipboard_text_candidate(handle);
+    let files = crate::clipboard_files::read(handle).ok()?;
+    // Native file lists take precedence over file-manager path text/previews.
+    let text = if files.is_some() { None } else { read_clipboard_text_candidate(handle) };
     if text.as_ref().is_some_and(|(text, _)| text.len() > 16 * 1024 * 1024) { return None; }
     let prefer_text = text.as_ref().is_some_and(|(text, sheet)| should_prefer_text_over_image(text, *sheet));
-    let image = if prefer_text { None } else {
+    let image = if files.is_some() || prefer_text { None } else {
         handle.clipboard().read_image().ok().and_then(|image| {
             let width = image.width(); let height = image.height();
             let size = checked_rgba_len(width, height)?;
@@ -1179,11 +1194,10 @@ fn read_portable_snapshot(handle: &AppHandle) -> Option<PortableSnapshot> {
     };
     // No readable supported format may be a transient permission/owner error.
     // Do not acknowledge that generation and suppress a later successful read.
-    if text.is_none() && image.is_none() { return None; }
-    #[cfg(target_os = "macos")]
-    if Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount()) != generation { return None; }
-    let digest = snapshot_digest(text.as_ref().map(|(text, _)| text.as_str()), image.as_ref().map(|(rgba, w, h)| (rgba.as_slice(), *w, *h)));
-    Some(PortableSnapshot { key: (digest, generation), text, image })
+    if text.is_none() && image.is_none() && files.is_none() { return None; }
+    if portable_generation() != generation { return None; }
+    let digest = snapshot_digest(text.as_ref().map(|(text, _)| text.as_str()), image.as_ref().map(|(rgba, w, h)| (rgba.as_slice(), *w, *h)), files.as_deref());
+    Some(PortableSnapshot { key: (digest, generation), text, image, files })
 }
 
 #[cfg(test)]
@@ -1192,11 +1206,16 @@ mod portable_snapshot_tests {
     #[test]
     fn fingerprint_covers_full_image_dimensions_and_text() {
         let a = vec![7; 800]; let mut b = a.clone(); b[799] = 9;
-        assert_ne!(snapshot_digest(None, Some((&a, 20, 10))), snapshot_digest(None, Some((&b, 20, 10))));
-        assert_ne!(snapshot_digest(None, Some((&a, 20, 10))), snapshot_digest(None, Some((&a, 10, 20))));
-        assert_ne!(snapshot_digest(Some("a"), None), snapshot_digest(Some("b"), None));
-        assert_ne!(snapshot_digest(Some(""), None), snapshot_digest(None, None));
+        assert_ne!(snapshot_digest(None, Some((&a, 20, 10)), None), snapshot_digest(None, Some((&b, 20, 10)), None));
+        assert_ne!(snapshot_digest(None, Some((&a, 20, 10)), None), snapshot_digest(None, Some((&a, 10, 20)), None));
+        assert_ne!(snapshot_digest(Some("a"), None, None), snapshot_digest(Some("b"), None, None));
+        assert_ne!(snapshot_digest(Some(""), None, None), snapshot_digest(None, None, None));
         assert!(checked_rgba_len(20_000, 20_000).is_none());
+    }
+    #[test]
+    fn file_fingerprint_distinguishes_lists_from_text_and_separator_paths() {
+        assert_ne!(snapshot_digest(Some("/a"), None, None), snapshot_digest(None, None, Some(&["/a".into()])));
+        assert_ne!(snapshot_digest(None, None, Some(&["/a|/b".into()])), snapshot_digest(None, None, Some(&["/a".into(), "/b".into()])));
     }
 }
 
@@ -1243,7 +1262,7 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     sync_monitor_cache(&handle);
 
     std::thread::spawn(move || {
-        let mut wake = crate::clipboard_wake::ClipboardWake::new();
+        let mut wake = crate::clipboard_wake::ClipboardWake::new(&handle);
         let startup = std::time::Instant::now();
         loop {
             wake.wait();
@@ -1305,8 +1324,20 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             #[cfg(target_os = "windows")]
             let text_candidate = read_clipboard_text_candidate(&handle);
             #[cfg(not(target_os = "windows"))]
-            let PortableSnapshot { text: text_candidate, image: portable_image, .. } = portable_snapshot.unwrap();
+            let PortableSnapshot { text: text_candidate, image: portable_image, files: portable_files, .. } = portable_snapshot.unwrap();
             drop(capture);
+            #[cfg(not(target_os = "windows"))]
+            if let Some(files) = portable_files {
+                *LAST_CLIPBOARD_TEXT.lock().unwrap() = String::new();
+                for path in files {
+                    if is_previewable_image_file(&path) || is_image_file(&path) {
+                        import_image_file(&handle, &path);
+                    } else {
+                        insert_and_emit(&handle, "file", &path);
+                    }
+                }
+                continue;
+            }
             if let Some((text, has_spreadsheet_format)) = text_candidate.as_ref() {
                 if should_prefer_text_over_image(text, *has_spreadsheet_format) {
                     *LAST_CLIPBOARD_TEXT.lock().unwrap() = text.clone();

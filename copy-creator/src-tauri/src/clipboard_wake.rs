@@ -4,10 +4,21 @@ use std::time::Duration;
 
 const WATCHDOG: Duration = Duration::from_millis(800);
 
+#[cfg(target_os = "linux")]
+static GENERATION: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+#[cfg(target_os = "linux")]
+static LISTENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+pub(crate) fn generation() -> Option<isize> {
+    use std::sync::atomic::Ordering;
+    LISTENING.load(Ordering::SeqCst).then(|| GENERATION.load(Ordering::SeqCst))
+}
+
 pub(crate) struct ClipboardWake(Option<Receiver<()>>);
 
 impl ClipboardWake {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(_app: &tauri::AppHandle) -> Self {
         #[cfg(target_os = "windows")]
         {
             let (sender, receiver) = mpsc::sync_channel(1);
@@ -20,6 +31,26 @@ impl ClipboardWake {
                 })
                 .is_ok()
             {
+                return Self(Some(receiver));
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            if _app.run_on_main_thread(move || {
+                use gtk::glib::prelude::ObjectExt;
+                use std::sync::atomic::Ordering;
+                let Some(display) = gtk::gdk::Display::default() else { return; };
+                let Some(board) = gtk::Clipboard::default(&display) else { return; };
+                // GTK forwards native selection-owner changes. The callback
+                // never reads contents, acquires storage locks, or blocks the UI.
+                board.connect_local("owner-change", false, move |_| {
+                    GENERATION.fetch_add(1, Ordering::SeqCst);
+                    let _ = sender.try_send(());
+                    None
+                });
+                LISTENING.store(true, Ordering::SeqCst);
+            }).is_ok() {
                 return Self(Some(receiver));
             }
         }

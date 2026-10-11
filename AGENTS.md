@@ -35,7 +35,7 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | [copy-creator/src-tauri/src/lib.rs](copy-creator/src-tauri/src/lib.rs) | 原生启动、模块接入和 command 注册 |
 | [copy-creator/src-tauri/src/single_instance.rs](copy-creator/src-tauri/src/single_instance.rs) | Windows 启动前单实例门闸、重复启动唤起和原生重启锁交接 |
 | [copy-creator/src-tauri/src/db.rs](copy-creator/src-tauri/src/db.rs) | SQLite、连接初始化和版本迁移 |
-| [copy-creator/src-tauri/src/clipboard.rs](copy-creator/src-tauri/src/clipboard.rs)、[clipboard_wake.rs](copy-creator/src-tauri/src/clipboard_wake.rs)、[paste.rs](copy-creator/src-tauri/src/paste.rs) | 剪贴板采集、Windows 有界事件唤醒与原生复制/粘贴保护 |
+| [copy-creator/src-tauri/src/clipboard.rs](copy-creator/src-tauri/src/clipboard.rs)、[clipboard_wake.rs](copy-creator/src-tauri/src/clipboard_wake.rs)、[clipboard_files.rs](copy-creator/src-tauri/src/clipboard_files.rs)、[paste.rs](copy-creator/src-tauri/src/paste.rs) | 剪贴板采集、Windows/Linux 有界事件唤醒、macOS/Linux 原生文件列表与原生复制/粘贴保护 |
 | [copy-creator/src-tauri/src/maintenance.rs](copy-creator/src-tauri/src/maintenance.rs)、[db_metrics.rs](copy-creator/src-tauri/src/db_metrics.rs) | 周期清理、暂停重试及可选数值诊断 |
 | [copy-creator/src-tauri/src/notes.rs](copy-creator/src-tauri/src/notes.rs)、[note_files.rs](copy-creator/src-tauri/src/note_files.rs) | 便签数据与原生文件引用操作 |
 | [copy-creator/src-tauri/src/note_search.rs](copy-creator/src-tauri/src/note_search.rs) | 便签/引用的派生候选索引、短词回退与有界查询 |

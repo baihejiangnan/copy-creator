@@ -1330,7 +1330,8 @@ fn perform_action(app: &AppHandle, action: ClipboardAction, paste_after: bool) -
             #[cfg(target_os = "windows")]
             write_files_to_clipboard(std::slice::from_ref(&path)).map_err(|_| "clipboard.copyFailed")?;
             #[cfg(not(target_os = "windows"))]
-            app.clipboard().write_text(&path).map_err(|_| "clipboard.copyFailed")?;
+            crate::clipboard_files::write(app, std::slice::from_ref(&path))
+                .map_err(|_| "clipboard.copyFailed")?;
             crate::clipboard::sync_monitor_cache(app);
         }
     }
