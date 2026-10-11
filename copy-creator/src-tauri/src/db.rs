@@ -2562,7 +2562,7 @@ mod tests {
         let conn = Connection::open(&file).unwrap();
         conn.execute_batch("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)").unwrap();
         conn.execute("INSERT INTO settings VALUES('storage_path',?1)", [missing.to_str().unwrap()]).unwrap();
-        assert_eq!(connection_storage_dir(&conn), Some(root.clone()));
+        assert_eq!(connection_storage_dir(&conn).unwrap().canonicalize().unwrap(), root.canonicalize().unwrap());
         assert!(!missing.exists());
         assert_eq!(connection_storage_dir(&Connection::open_in_memory().unwrap()), None);
         drop(conn);

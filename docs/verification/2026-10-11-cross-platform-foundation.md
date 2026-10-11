@@ -36,9 +36,11 @@
 
 本机安装的 WSL 仅列出 `docker-desktop`，不视为 Linux 桌面环境。`docker desktop start --detach` 返回启动请求已发出，但之后仍无法连接 `dockerDesktopLinuxEngine`，没有可运行的 Linux 容器；已停止重复启动尝试。只在 `output/cross-platform-prep/linux-source` 暂存应用 Rust 源码/配置与前端 dist，未挂载用户 AppData、数据库或密钥。
 
-首次 GitHub CI 的前端检查通过；macOS ARM 与 Linux 原生编译暴露 `enigo::Key::V` 仅 Windows 存在，macOS 另暴露透明窗口缺少 `macos-private-api`。改为跨平台 `Key::Unicode('v')`，并配对启用 Tauri feature 与 `app.macOSPrivateApi`，保留透明界面。Windows 普通粘贴仍使用原来的 Windows 路径。后续 CI 结果在本记录收尾补齐。
+首次 GitHub CI 的前端检查通过，三个原生目标均编译失败：`enigo::Key::V` 仅 Windows 存在，两个 macOS 目标另缺透明窗口的 `macos-private-api`。修复提交 `01d11039261e37f148ecda8842c8433816696ace` 改为跨平台 `Key::Unicode('v')`，并配对启用 Tauri feature 与 `app.macOSPrivateApi`，保留透明界面。Windows 普通粘贴仍使用原来的 Windows 路径；修复后 Windows `cargo check --locked` 与粘贴修饰键回归通过。[第二轮 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38108699661) 仍关闭打包；最终结果收尾补齐。
 
 没有执行实际系统钥匙串读写、辅助功能权限、X11/Wayland、浏览器/文件管理器、托盘/关闭/焦点/重启或系统剪贴板桌面验证。没有启动 QA 应用或改变系统剪贴板；不把旧桌面报告作为这批新分支的证据。
+
+第二轮三个目标均完成原生代码编译并进入测试。macOS ARM 返回 164 通过、3 失败、3 默认忽略；Linux 返回 165 通过、2 失败、3 默认忽略。共同失败为 v3/v4 备份在目标系统拒绝 Windows 文件引用，这是实际跨平台恢复缺陷；保留原 Windows 夹具，改为接受 POSIX、Windows 盘符与 UNC 绝对引用数据（含扩展盘符/UNC），并覆盖外国路径恢复后编辑。明确打开文件仍要求本机原生绝对路径，不访问外部文件。macOS 的另外一项是临时路径 `/var` 与 SQLite 返回 `/private/var` 的符号链接差异，仅修正测试为 canonicalize 后比较，生产存储路由不变。修复后 Windows 全量 Rust 189 通过、6 默认忽略。
 
 已知功能缺口仍包括 Linux 相同内容重复制与原生事件、私密剪贴板归属/到期清除/私密填入、原生文件剪贴板格式、非 Windows 单实例与焦点保护、轮盘手势及平台签名/安装/桌面验收。当前非 Windows 私密复制返回明确错误，普通 Linux Wayland 自动粘贴及非 Windows 置顶面板自动粘贴被拒绝；这些保护性限制不算功能验收。Linux 图片轮询成本、系统密钥服务 RPC 耗时及插件图片解码预分配上限仍需测量/修正。
 

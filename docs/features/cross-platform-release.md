@@ -14,7 +14,7 @@
 
 Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runner 版本是构建环境，不等于已验证的最低运行系统；Linux 先验收 X11，Wayland 须单独验证，不能用 XWayland 成功推断原生 Wayland 可用。
 
-工具版本参照当前 Windows 开发环境固定为 Node 24.19.0、pnpm 11.7.0、Rust 1.98.1；JS/Cargo 依赖使用现有锁文件，第三方 Actions 固定提交。前端类型、单测、lint 成功后，各原生平台独立执行前端生产构建与 `cargo test --locked`；矩阵一项失败不取消其他平台。本轮已处理确认的 DPAPI 无条件引用阻塞；尚未实际运行三个原生目标，其他编译缺口由 CI 继续暴露，不允许忽略失败后上传安装包。
+工具版本参照当前 Windows 开发环境固定为 Node 24.19.0、pnpm 11.7.0、Rust 1.98.1；JS/Cargo 依赖使用现有锁文件，第三方 Actions 固定提交。前端类型、单测、lint 成功后，各原生平台独立执行前端生产构建与 `cargo test --locked`；矩阵一项失败不取消其他平台。本轮已处理 DPAPI 无条件引用，以及首次原生 CI 暴露的按键枚举和 macOS 透明窗口 feature 阻塞；不得忽略失败后上传安装包。
 
 工作流已按本次授权提交/推送到 `origin/main`，可从 Actions 页面选择 **macOS and Linux readiness → Run workflow**。首次保持 `build_packages=false`，保存每个平台实际编译错误；原生验证通过后再启用打包。实际来源与 CI 结果见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
 
@@ -53,7 +53,7 @@ Windows 的六文件发行规则仍只适用于 Windows。联合发行需先扩�
 
 用合成资料与隔离 identifier/系统集成，在两类 Mac 和 Linux 实机/桌面环境分别覆盖：首次启动/托盘/快捷键/轮盘、中文 IME、亮暗/中英/最小窗/缩放、文本/图片/文件采集和外部粘贴、私密复制到期与后续用户复制、自动保存/异常重开/退出与重启、目录搬迁、加密备份跨平台恢复、安装/卸载/升级。系统密钥服务锁定/缺失、macOS 权限拒绝、Wayland 限制须有明确产品行为和可见提示。核对所有 QA 进程与测试后系统状态恢复；不得默认访问真实用户数据。
 
-本轮本机只具备 Windows 工具链；WSL 清单只有 `docker-desktop`，不视作已准备的 Linux 桌面 QA 环境。本轮尝试启动 Docker Desktop 后仍无法连接 Linux 引擎，未创建或运行 Linux 验证容器；没有 macOS/Linux 包、远端 CI 结果、签名公证或桌面验收结果。
+本轮本机只具备 Windows 工具链；WSL 清单只有 `docker-desktop`，不视作已准备的 Linux 桌面 QA 环境。本轮尝试启动 Docker Desktop 后仍无法连接 Linux 引擎，未创建或运行 Linux 验证容器。远端原生 CI 结果单独记录在验证文档；没有 macOS/Linux 包、签名公证或桌面验收结果。
 
 本轮已执行：actionlint 1.7.12 工作流检查通过（下载文件与上游 SHA-256 清单一致；Windows 上未执行 ShellCheck）；Git Bash `bash -n` 对全部 11 个 run 块语法检查通过；YAML 的手动触发/只读权限/三目标矩阵检查、受影响文档相对文件链接检查、`git diff --check` 通过。这些是此前准备轮的静态证据；本轮源码变更与自动回归结果见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)，不将 Windows 回归记为 macOS/Linux 构建通过。
 

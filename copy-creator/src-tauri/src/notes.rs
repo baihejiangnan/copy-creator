@@ -150,6 +150,31 @@ fn valid_id(id: &str) -> Result<()> {
     }
     Ok(())
 }
+// References are portable data: a foreign absolute path must survive backup
+// import and subsequent edits. Opening a file still requires a native absolute
+// path in note_files, where existence is checked only on explicit user action.
+fn absolute_file_reference(target: &str) -> bool {
+    if target.starts_with('/') || std::path::Path::new(target).is_absolute() {
+        return true;
+    }
+    let windows = target.strip_prefix(r"\\?\").unwrap_or(target);
+    let bytes = windows.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/') {
+        return true;
+    }
+    let unc = if target.starts_with(r"\\?\") {
+        windows.strip_prefix(r"UNC\")
+    } else {
+        target.strip_prefix(r"\\")
+    };
+    unc.is_some_and(|rest| {
+        let mut parts = rest.split(['\\', '/']);
+        parts.next().is_some_and(|part| !part.is_empty() && !matches!(part, "." | ".."))
+            && parts.next().is_some_and(|part| !part.is_empty() && !matches!(part, "." | ".."))
+    })
+}
+
 pub(crate) fn validate(draft: &NoteDraft) -> Result<()> {
     if draft.body.len() > MAX_BODY_BYTES {
         return Err(error("notes.bodyTooLarge"));
@@ -173,7 +198,7 @@ pub(crate) fn validate(draft: &NoteDraft) -> Result<()> {
             return Err(error("notes.invalidRef"));
         }
         match reference.kind.as_str() {
-            "file" if std::path::Path::new(&reference.target).is_absolute() => (),
+            "file" if absolute_file_reference(&reference.target) => (),
             "url"
                 if reqwest::Url::parse(&reference.target)
                     .map(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
@@ -1461,6 +1486,22 @@ mod tests {
         input.refs[0].kind = "file".into();
         input.refs[0].target = "relative.txt".into();
         assert_eq!(validate(&input).unwrap_err().code, "notes.invalidRef");
+    }
+
+    #[test]
+    fn foreign_absolute_file_references_remain_editable_without_becoming_relative() {
+        let mut input = draft("portable reference");
+        input.refs = vec![url_ref()];
+        input.refs[0].kind = "file".into();
+        for target in ["/home/synthetic/文件.txt", r"C:\external\keep.txt", "C:/external/keep.txt",
+            r"\\server\share\keep.txt", r"\\?\C:\external\keep.txt", r"\\?\UNC\server\share\keep.txt"] {
+            input.refs[0].target = target.into();
+            assert!(validate(&input).is_ok(), "{target}");
+        }
+        for target in ["relative.txt", r"C:relative.txt", r"\rooted.txt", "", "file:///tmp/file", "bad\0path"] {
+            input.refs[0].target = target.into();
+            assert_eq!(validate(&input).unwrap_err().code, "notes.invalidRef");
+        }
     }
 
     #[test]

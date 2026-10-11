@@ -923,8 +923,8 @@ mod tests {
     const KEY: &str = "sk-backup-private-test-key-123456789";
 
     fn note_fixture() -> note_backup::BackupNote {
-        note_backup::BackupNote {id:uuid::Uuid::new_v4().to_string(),title:"便签".into(),body:"  完整正文\n第二行  ".into(),refs:vec![crate::notes::NoteRef {
-            id:uuid::Uuid::new_v4().to_string(),kind:"file".into(),target:"C:\\external\\keep.txt".into(),display_name:"keep".into()}],
+        note_backup::BackupNote {id:uuid::Uuid::new_v4().to_string(),title:"便签".into(),body:"  完整正文\n第二行  ".into(),refs:[r"C:\external\keep.txt", "/home/synthetic/keep.txt", r"\\server\share\keep.txt"].into_iter().map(|target| crate::notes::NoteRef {
+            id:uuid::Uuid::new_v4().to_string(),kind:"file".into(),target:target.into(),display_name:"keep".into()}).collect(),
             source:Some(crate::notes::NoteSource {kind:"text".into(),record_id:uuid::Uuid::new_v4().to_string(),source_app:"fixture".into(),captured_at_ms:2}),created_at_ms:1,updated_at_ms:2,archived_at_ms:Some(3),group_id:None,starred:false}
     }
     #[test]
@@ -950,6 +950,7 @@ mod tests {
         let snapshot=export_snapshot(&source).unwrap(); assert_eq!(snapshot.version,4); assert_eq!(snapshot.notes.len(),1);
         let bytes=encode_bundle_owned(snapshot,BACKUP_PASSWORD).unwrap(); let (restored,_)=decode_bundle(&bytes,BACKUP_PASSWORD).unwrap();
         assert_eq!(restored.notes[0].body,note.body); assert_eq!(restored.notes[0].source,note.source);
+        assert_eq!(restored.notes[0].refs.iter().map(|r| &r.target).collect::<Vec<_>>(),note.refs.iter().map(|r| &r.target).collect::<Vec<_>>());
         let mut envelope:EncryptedBackup=serde_json::from_slice(&bytes).unwrap(); envelope.version=2;
         assert_eq!(decode_bundle(&serde_json::to_vec(&envelope).unwrap(),BACKUP_PASSWORD).err().unwrap(),"backup.wrongPassword");
     }
