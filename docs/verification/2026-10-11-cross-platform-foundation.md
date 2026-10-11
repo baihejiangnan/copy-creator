@@ -4,7 +4,7 @@
 
 基线为 `main` 的 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮修复已在用户授权后提交并推送至 `origin/main`，源码 SHA 为 `4cf3965f1384b442f8f7a5276c537e796c2517e8`；已启动[首次手动 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38108284062)，`build_packages=false`。未打标签或发布。应用版本仍为 0.3.0，schema 6、备份 v4 和 Windows 更新信任/六文件合同保持。设计和未完成项分别见[跨平台准备](../features/cross-platform-release.md)与 [TODO](../TODO.md)。
 
-本轮处理系统密钥保护、受保护前缀在清理/备份/便签中的一致性、初步剪贴板采集与普通粘贴、私密复制保护性拒绝、非 Windows 链接/文件定位及关闭到托盘。系统测试与正式打包尚未发生；新平台原生代码存在不等于平台构建或验收通过。
+首轮处理系统密钥保护、受保护前缀在清理/备份/便签中的一致性、初步剪贴板采集与普通粘贴、私密复制保护性拒绝、非 Windows 链接/文件定位及关闭到托盘。原生 CI 与后续验证打包分别记录在下文；新平台原生代码存在不等于桌面验收通过。
 
 ## 已执行结果
 
@@ -46,4 +46,14 @@
 
 已知功能缺口仍包括 Linux 相同内容重复制与原生事件、私密剪贴板归属/到期清除/私密填入、原生文件剪贴板格式、非 Windows 单实例与焦点保护、轮盘手势及平台签名/安装/桌面验收。当前非 Windows 私密复制返回明确错误，普通 Linux Wayland 自动粘贴及非 Windows 置顶面板自动粘贴被拒绝；这些保护性限制不算功能验收。Linux 图片轮询成本、系统密钥服务 RPC 耗时及插件图片解码预分配上限仍需测量/修正。
 
-三个目标的类型、链接及默认单测阻塞已清除。下一步接原生事件、私密归属协议与单实例/焦点保护，再生成验证包并在对应操作系统完成全套桌面验收。公开 Release 需要独立授权和发布合同，当前工作不自动公开。
+三个目标的类型、链接及默认单测阻塞已清除。用户随后授权先执行验证打包，功能缺口继续保留；对应操作系统的全套桌面验收仍待完成。公开 Release 需要独立授权和发布合同，当前工作不自动公开。
+
+## 验证打包与包内检查
+
+用户授权提交、推送与运行 CI 后，手动启动[验证打包](https://github.com/baihejiangnan/copy-creator/actions/runs/38110485878)，`build_packages=true`，固定来源为 `67d34467b1f99de53fdf4dcf81fff7b3d1b36f39`。该提交与前轮 `2f1b0c6` 的应用工程源码完全一致，差异只有文档；版本保持 0.3.0，产物标记 `validationOnly=true`，不向已有 Release 添加附件。
+
+包内检查工作流及脚本提交为 `04e1aa5`，不改变应用工程或本轮构建来源。其本地静态检查包括 actionlint 1.7.12、Git Bash `bash -n`、Python 编译、文档链接和 `git diff --check`，均通过；Windows 未执行 ShellCheck。完整性脚本用临时合成包验证合法集合通过，并拒绝内容篡改、错误来源、非验证模式、缺包、重复摘要、越界路径和额外文件，不读取用户资料。
+
+首次打包 CI 全部成功，三个平台各 168 Rust 通过/3 默认忽略，前端 117、类型及完整 lint 通过；两个 `.app`/DMG、DEB/AppImage 均实际生成。四个包下载至本机后，来源、target、文件集合及 SHA-256 全部匹配。[首次包内检查](https://github.com/baihejiangnan/copy-creator/actions/runs/38111409371) 的两个 macOS 目标通过：DMG 校验/只读挂载、plist/版本/identifier、架构、图标、Applications 链接、内部执行权限与 ad-hoc codesign 验证通过。没有执行公证或 Gatekeeper 验收。
+
+Linux 首次包内检查在 AppImage `.DirIcon` 存在性处失败，DEB 的 ELF 检查另发现直接链接 `libxdo.so.3`、`libssl.so.3`/`libcrypto.so.3`，但元数据只有三个 Tauri 默认依赖。构建器仍为 CLI 2.11.1；[上游 2.11.4 修复说明](https://tauri.app/release/@tauri-apps/cli/v2.11.4/)明确修复 AppImage 图标和桌面入口指向构建机绝对路径的问题。本轮只将 CLI 固定为 2.11.4，锁文件其他依赖版本保持原值，不升级 Rust Tauri/runtime；DEB 额外声明 `libxdo3`、`libssl3` 与链接打开使用的 `xdg-utils`。检查脚本增加链接目标必须位于解出目录内、依赖声明及失败行号检查；修复包需要重新构建/核验，首次 Linux 包不能记为通过。

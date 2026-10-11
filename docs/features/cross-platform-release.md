@@ -55,7 +55,7 @@ Windows 的六文件发行规则仍只适用于 Windows。联合发行需先扩�
 
 用合成资料与隔离 identifier/系统集成，在两类 Mac 和 Linux 实机/桌面环境分别覆盖：首次启动/托盘/快捷键/轮盘、中文 IME、亮暗/中英/最小窗/缩放、文本/图片/文件采集和外部粘贴、私密复制到期与后续用户复制、自动保存/异常重开/退出与重启、目录搬迁、加密备份跨平台恢复、安装/卸载/升级。系统密钥服务锁定/缺失、macOS 权限拒绝、Wayland 限制须有明确产品行为和可见提示。核对所有 QA 进程与测试后系统状态恢复；不得默认访问真实用户数据。
 
-本轮本机只具备 Windows 工具链；WSL 清单只有 `docker-desktop`，不视作已准备的 Linux 桌面 QA 环境。本轮尝试启动 Docker Desktop 后仍无法连接 Linux 引擎，未创建或运行 Linux 验证容器。远端原生 CI 结果单独记录在验证文档；没有 macOS/Linux 包、签名公证或桌面验收结果。
+本轮本机只具备 Windows 工具链；WSL 清单只有 `docker-desktop`，不视作已准备的 Linux 桌面 QA 环境。本轮尝试启动 Docker Desktop 后仍无法连接 Linux 引擎，未创建或运行 Linux 验证容器。远端原生 CI 与首次四个验证包已记录在验证文档；macOS 包内检查通过，Linux 包内检查发现的缺陷正在修复重建，尚无签名公证或桌面验收结果。
 
 本轮已执行：actionlint 1.7.12 工作流检查通过（下载文件与上游 SHA-256 清单一致；Windows 上未执行 ShellCheck）；Git Bash `bash -n` 对全部 11 个 run 块语法检查通过；YAML 的手动触发/只读权限/三目标矩阵检查、受影响文档相对文件链接检查、`git diff --check` 通过。这些是此前准备轮的静态证据；本轮源码变更与自动回归结果见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)，不将 Windows 回归记为 macOS/Linux 构建通过。
 

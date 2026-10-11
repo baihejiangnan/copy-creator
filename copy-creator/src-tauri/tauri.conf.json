@@ -49,6 +49,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": {
+        "depends": ["libxdo3", "libssl3", "xdg-utils"]
+      }
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",

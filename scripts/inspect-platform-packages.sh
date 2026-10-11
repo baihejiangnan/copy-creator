@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Read package structures in an ephemeral runner. Never launch the application.
 set -euo pipefail
+trap 'printf "Package inspection failed at line %s\n" "$LINENO" >&2' ERR
 package_root=$(cd "$1" && pwd)
 target=$2
 version=$3
@@ -69,10 +70,17 @@ case "$target" in
     test -x squashfs-root/AppRun
     test -x squashfs-root/usr/bin/copy-creator
     readelf -h squashfs-root/usr/bin/copy-creator | grep 'Advanced Micro Devices X86-64'
+    ls -l squashfs-root/.DirIcon squashfs-root/*.desktop
     test -s squashfs-root/.DirIcon
     desktops=(squashfs-root/*.desktop)
     test "${#desktops[@]}" -eq 1
     desktop-file-validate "${desktops[0]}"
+    # Root integration links must resolve inside the extracted image after a
+    # move to a different host, never into the original build workspace.
+    python3 -c 'import pathlib; root=pathlib.Path("squashfs-root").resolve(); paths=[root/".DirIcon", *root.glob("*.desktop")]; assert all(p.resolve(strict=True).is_relative_to(root) for p in paths), "AppImage integration link escapes image"'
+    for dependency in libxdo3 libssl3 xdg-utils; do
+      grep -Eq "(^|, *)$dependency([ (]|,|$)" <<< "$depends"
+    done
     printf 'DEB and AppImage structure verified; no installation or application launch; FUSE runtime not tested\n'
     ;;
   *) exit 1;;
