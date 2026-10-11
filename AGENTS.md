@@ -43,7 +43,7 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | [copy-creator/src-tauri/src/updates.rs](copy-creator/src-tauri/src/updates.rs)、[update_package.rs](copy-creator/src-tauri/src/update_package.rs)、[update_signature.rs](copy-creator/src-tauri/src/update_signature.rs) | 公开更新元数据、运行模式、签名下载和保存后升级；独立发行验证器复用原生验签代码 |
 | [copy-creator/src-tauri/src/backup.rs](copy-creator/src-tauri/src/backup.rs)、[note_backup.rs](copy-creator/src-tauri/src/note_backup.rs) | 加密备份、导入与便签恢复 |
 | [copy-creator/src-tauri/src/vault.rs](copy-creator/src-tauri/src/vault.rs)、[vault_crypto.rs](copy-creator/src-tauri/src/vault_crypto.rs) | 密码箱权限、会话与加密 |
-| [copy-creator/src-tauri/src/secrets.rs](copy-creator/src-tauri/src/secrets.rs)、[secrets_portable.rs](copy-creator/src-tauri/src/secrets_portable.rs)、[desktop_open.rs](copy-creator/src-tauri/src/desktop_open.rs) | Windows DPAPI、macOS/Linux 系统密钥库与认证密文；非 Windows 浏览器/文件定位 |
+| [copy-creator/src-tauri/src/secrets.rs](copy-creator/src-tauri/src/secrets.rs)、[secrets_portable.rs](copy-creator/src-tauri/src/secrets_portable.rs)、[desktop_open.rs](copy-creator/src-tauri/src/desktop_open.rs)、[desktop_focus.rs](copy-creator/src-tauri/src/desktop_focus.rs) | Windows DPAPI、macOS/Linux 系统密钥库与认证密文；非 Windows 浏览器/文件定位与双窗焦点保护 |
 | [copy-creator/tests/](copy-creator/tests/) | 前端逻辑单元测试；Rust 测试位于原生源码中 |
 | [copy-creator/public/](copy-creator/public/)、[assets-source/](copy-creator/assets-source/) | 随应用发布的资源、保留但不发布的原始素材 |
 | [scripts/](scripts/) | 辅助验证脚本；运行前确认其目标和数据隔离方式 |

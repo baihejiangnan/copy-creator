@@ -80,3 +80,26 @@ Linux 首次包内检查在 AppImage `.DirIcon` 存在性处失败，DEB 的 ELF
 共用源码改动（CLI 2.11.4 固定、`linux.deb.depends` 新增）之后，在 `bbb224c89cfe8bce611cd347154558ddd8cd4b23` 重跑 Windows 全量 Rust 单测：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib` 退出码 0，**189 通过、6 默认忽略、0 失败**，与改动前的 189/6 基线一致。`d6e7838..bbb224c` 仅含文档，应用工程源码与已构建 MSI 的来源相同。
 
 首次尝试因在错误 shell 中拼接命令失败，报错为系统 Temp 的 `PermissionDenied`（既有环境现象，见 [问题与解决方案](../problems_and_solutions.md)），非代码缺陷；把子进程 TMP/TEMP 指向 `output/cross-platform-prep/temp` 后复跑通过。当前执行环境为 pwsh 7.6.6（Core）。
+
+
+## 功能补齐：原生文件剪贴板与窗口焦点
+
+用户随后明确 Windows/macOS/Linux 三端功能必须完整一致，仅非 Windows 单实例保护可暂缓。本轮开始补实现；不是再次把要求写入文档后就视作完成。工作区另有随记 Agent 接口改动，本轮逐文件/逐段暂存自己的变更，独立固定提交检出做 Windows 回归，不将未提交的其他任务混入 CI。
+
+### 原生文件与 Linux 变化通知
+
+`88c196c` 接入 `clipboard_files.rs`：macOS 使用多个 `public.file-url` pasteboard item；Linux 使用 GTK `text/uri-list` 与 `x-special/gnome-copied-files`，写入固定为 copy，不删除或移动外部文件。共享 URI 编解码保留中文、空格、百分号、换行和保留字符，只接受本地绝对 file URI，拒绝远端主机、非 file 协议、NUL、无效 UTF-8/百分号、查询和片段。最多 512 项、1 MiB 列表、单路径 16 KiB；这是应用接收/编码边界，不能保证 GTK/AppKit 内部预分配上限。Linux 请求等待 750ms、至多一个未完成读取，过期的主线程写任务不执行；GTK 主线程启动缓存不阻塞等待自己的回调。
+
+采集优先原生文件而非文件管理器附带的路径文本或缩略图；图片文件复用既有图片导入，其余记录为 file。文件列表指纹按项数和字节长度分隔，不会把含分隔符的单个文件当作多个文件。Linux GTK owner-change 回调只递增计数并向容量 1 通道 try_send，不读取内容或持有数据库锁；watchdog 保留内容指纹读取，不能因 Wayland 后台通知不完整而永久跳过内容变化。
+
+`ab32ce8` 的[原生文件 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38145363647)全部成功，未启用打包：前端 117/类型/lint 通过，三个目标各 173 Rust 通过/4 默认忽略，main 与 doctest 0 失败。新增的隔离原生测试另显式执行，各 1 通过/0 忽略：Linux 在 Xvfb 的私有 selection 验证两种文件格式与相同内容重复制通知；两类 Mac 使用 `pasteboardWithUniqueName` 验证多项文件读写和 changeCount，未读写 general pasteboard。四项 URI 测试及文件指纹边界包含真实解析/编码路径，不访问用户文件。首轮 `88c196c` CI 因加入 macOS 隔离测试及 watchdog 防护而主动取消，不能算失败或通过；以 `ab32ce8` 完整结果为准。
+
+Windows 固定提交 `88c196c` 的全量 lib 回归 194 通过/6 默认忽略，退出码 0。测试使用受控 TMP/TEMP；未启动应用、安装包或访问实际剪贴板/密钥库。
+
+### 非 Windows 窗口焦点保护
+
+`236cb31` 接入 `desktop_focus.rs`：主窗/轮盘共用一个待执行的 250ms 失焦检查；在主线程重新读取窗口状态，保护应用内焦点、置顶、最小化、原生对话框与可见主窗内的光标，状态查询失败时不隐藏。隐藏继续使用既有 lifecycle 入口。它不提供外部粘贴目标捕获/身份确认/恢复，也不实现轮盘全局鼠标手势。
+
+`40153ed` 修正隐藏主窗旧坐标范围误保护轮盘的边界，新增第四项策略测试。该提交相对 `236cb31` 仅修改共用策略条件和对应测试，没有修改平台 API 或依赖。最终固定 `40153ed109d33dff3d86fc1c44b8545788bd5468` 的 Windows 全量 lib 回归 **198 通过/6 默认忽略/0 失败**，退出码 0；焦点策略测试共 4 项。`236cb31` 的[焦点原生 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38145771109)全部成功：前端 117/类型/lint，三个目标各 176 Rust 通过/4 默认忽略，main/doctest 0 失败；每个目标另显式执行隔离文件测试，各 1 通过/0 忽略。本结果覆盖焦点模块的平台 API 编译和三项共用策略测试；`40153ed` 的第四项边界修正只在上述 Windows 固定检出回归执行，未再次运行原生矩阵，不混淆来源。
+
+本轮未执行真实窗口/托盘、Finder/文件管理器外部粘贴、原生 Wayland 或性能验收；私密复制/填入、外部目标焦点恢复、轮盘手势、应用内更新等缺口仍未解决。现有四个验证包来源仍是 `d6e7838`，不包含本轮新功能；本轮没有新包、标签或 Release。
