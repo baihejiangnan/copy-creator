@@ -74,3 +74,9 @@ Linux 首次包内检查在 AppImage `.DirIcon` 存在性处失败，DEB 的 ELF
 | `Copy Creator_0.3.0_amd64.AppImage` | 115,677,688 | `f54747aff1adac3227088c69700290544584ed40900110de074895fe5d3f55eb` |
 
 本轮完成验证打包与包内结构检查，没有启动应用、安装 DEB/MSI、验证 AppImage FUSE 实际运行、完成 Apple 公证/Gatekeeper 或桌面验收。私密剪贴板、Linux 原生事件、原生文件格式、单实例/焦点、轮盘手势及性能缺口保持；非 Windows 应用内更新仍为 unsupported。本轮无标签、无公开 Release、无更新元数据变更，收尾文档提交不改变上述产物来源。
+
+### 跨平台改动后的 Windows 回归
+
+共用源码改动（CLI 2.11.4 固定、`linux.deb.depends` 新增）之后，在 `bbb224c89cfe8bce611cd347154558ddd8cd4b23` 重跑 Windows 全量 Rust 单测：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib` 退出码 0，**189 通过、6 默认忽略、0 失败**，与改动前的 189/6 基线一致。`d6e7838..bbb224c` 仅含文档，应用工程源码与已构建 MSI 的来源相同。
+
+首次尝试因在错误 shell 中拼接命令失败，报错为系统 Temp 的 `PermissionDenied`（既有环境现象，见 [问题与解决方案](../problems_and_solutions.md)），非代码缺陷；把子进程 TMP/TEMP 指向 `output/cross-platform-prep/temp` 后复跑通过。当前执行环境为 pwsh 7.6.6（Core）。

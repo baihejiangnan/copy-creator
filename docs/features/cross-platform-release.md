@@ -1,6 +1,6 @@
 # macOS / Linux Release 准备
 
-本轮范围是构建与发布准备，不是平台移植完成或公开授权。Windows 0.3.0 的已发布文件和更新元数据保持既有合同；macOS / Linux 尚不能正式发行。任务状态只维护在 [TODO](../TODO.md)。
+本轮范围是构建与发布准备，不是平台移植完成或公开授权。Windows 0.3.0 的已发布文件和更新元数据保持既有合同；macOS / Linux 尚不满足**当前承诺范围**的正式发行条件，缩减范围的基础测试包可先行验证，但尚不具备面向用户的公开分发条件。任务状态只维护在 [TODO](../TODO.md)。
 
 ## 构建目标与入口
 
@@ -39,13 +39,17 @@ Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runne
 | 窗口与单实例 | 非 Windows 关闭主窗改为隐藏到托盘，保留统一保存交接；Windows 路径保持 | 非 Windows 单实例、失焦自动隐藏、主窗/轮盘焦点、托盘/重启与开机启动仍待平台实现或验收 |
 | 应用内更新 | 非 Windows mode=`unsupported`，现有 MSI 合同保持 | 首轮明确手动安装/更新；若后续加入自动更新，另实现平台选择、签名、安装和保存交接 |
 
-本轮不是完整移植。上述限制继续阻塞正式 macOS/Linux 发行；不关闭失败测试、不降级为明文，也不把保护性拒绝或未运行的原生分支记为验收完成。
+本轮不是完整移植。下列限制阻塞**按当前功能承诺的完整正式发行**；若明确缩减预览范围（例如 Linux 只发 DEB、暂不提供私密复制），部分项目可暂不覆盖，但安全保护、启动与数据可靠性仍须验证，且缩减后的范围必须对用户可见，不能把未实现功能说成已支持。按包判断：AppImage 运行问题只阻塞 AppImage；DEB 无此依赖，但仍有自身未验证项（安装/卸载、桌面入口、托盘、WebKitGTK）。不关闭失败测试、不降级为明文，也不把保护性拒绝或未运行的原生分支记为验收完成。
+
+安全与可靠性不因缩减范围而免除验证：系统密钥保护的持久化与缺失/锁定/拒绝行为、保存屏障与草稿恢复、退出重启后的数据保持、加密备份的导入与回滚，属于任何预览范围都必须先验证的部分。
 
 ## 签名与正式发布材料
 
 当前锁定的 Tauri 2.11.1 需要配对启用 `macos-private-api` feature 与 `app.macOSPrivateApi` 才能保留主窗/轮盘透明背景；该配置不提供 Apple 签名或公证，当前采用独立 DMG 分发路线，未准备 Mac App Store 上架。
 
 macOS 验证包使用 `APPLE_SIGNING_IDENTITY=-` 的 ad-hoc 签名，仅用于开发验证。正式分发准备 Apple Developer 的 Developer ID Application 证书（P12）、证书密码、签名 identity，以及 notarization 凭据。Apple ID 方式使用 `APPLE_ID`、应用专用 `APPLE_PASSWORD`、`APPLE_TEAM_ID`；也可改用 App Store Connect 的 `APPLE_API_ISSUER`、`APPLE_API_KEY`、`APPLE_API_KEY_PATH`。凭据通过受控 CI secrets/临时文件提供，不进入仓库、artifact 或日志；本准备工作流尚未接入这些凭据。正式包需验证 codesign、notarization/stapling 与下载后 Gatekeeper 行为，不把 ad-hoc 或 Tauri 更新签名当作 Apple 公证。
+
+ad-hoc 包不等于不可用：它没有 Developer ID 签名和公证，默认 Gatekeeper 会拦截，但系统策略允许时，可信测试者可通过「隐私与安全性 → 仍要打开」授权运行（[Apple 官方说明](https://support.apple.com/en-us/102445)）。draft/prerelease 标签本身不改变这一行为，也不构成公开分发准备。该授权路径只适用于内部基础测试，不能替代 Developer ID 签名与公证，也不作为面向最终用户的获取方式。
 
 Linux 包须核对运行依赖、安装/卸载、桌面入口、托盘、开机启动与 WebKitGTK；AppImage 另验证执行权限、FUSE/无 FUSE 的受支持启动方式与实际分发版兼容。构建 Ubuntu 22.04 不表示支持所有 Linux 发行版。正式公开前给每个包生成大小、SHA-256、来源 SHA 和签名；若采用现有更新信任，沿用受控发行密钥，先扩展独立验证器与附件合同，不随意生成替代密钥。
 
@@ -56,6 +60,26 @@ Windows 的六文件发行规则仍只适用于 Windows。联合发行需先扩�
 用合成资料与隔离 identifier/系统集成，在两类 Mac 和 Linux 实机/桌面环境分别覆盖：首次启动/托盘/快捷键/轮盘、中文 IME、亮暗/中英/最小窗/缩放、文本/图片/文件采集和外部粘贴、私密复制到期与后续用户复制、自动保存/异常重开/退出与重启、目录搬迁、加密备份跨平台恢复、安装/卸载/升级。系统密钥服务锁定/缺失、macOS 权限拒绝、Wayland 限制须有明确产品行为和可见提示。核对所有 QA 进程与测试后系统状态恢复；不得默认访问真实用户数据。
 
 本轮本机只具备 Windows 工具链；WSL 清单只有 `docker-desktop`，不视作已准备的 Linux 桌面 QA 环境。本轮尝试启动 Docker Desktop 后仍无法连接 Linux 引擎，未创建或运行 Linux 验证容器。远端原生 CI、四个验证包及修复后包内检查成功结果已记录在验证文档；尚无签名公证、实际安装或桌面验收结果。
+
+外部验证条件不只有签名证书。对应系统的桌面测试环境（两类 Mac 实机、Linux 桌面），真实 Keychain/Secret Service 与权限拒绝、服务缺失/锁定场景，同样是当前缺少的验证条件；Apple 证书准备可与功能补齐、基础测试并行推进，无需先行等待。
+
+### 基础桌面测试（可先开展）
+
+现有四个验证包可直接用于基础测试，不必等证书或未实现功能：安装/载入、启动、托盘、普通文本复制粘贴、保存与重启后数据保持、系统密钥服务读写属于第一批范围；已知未实现项（私密复制、Linux 原生事件、原生文件格式、单实例/焦点、轮盘手势）保持待验，不计入基础结论。
+
+这些包使用正式 identifier `com.copycreator.app`，会与已安装的正式版共用数据目录、单实例锁与系统密钥条目。测试 MUST 在干净测试系统或专用测试账户中进行，只用合成夹具，且在测试前确认该环境没有需要保留的用户资料；否则改用隔离 identifier 构建 QA 包。
+
+隔离 QA 包的做法沿用既有 Windows 实验模式：用 `tauri build --config <qa>.json` 覆盖 `identifier`（例如 `com.copycreator.qa<日期>`），其余配置不变。下列隔离点已在源码实现，构建 QA 包前应逐项确认仍然成立：
+
+| 隔离点 | 位置 | 行为 |
+| --- | --- | --- |
+| 系统密钥条目 | `secrets_portable.rs` | 服务名 `{identifier}.local-secrets.v1`，AAD 与密文均绑定 identifier，QA 与正式版密钥互不可解 |
+| 粘贴图片目录 | `paste.rs` | 非 `com.copycreator.app` 写入 `copy_creator_paste_instances/<identifier 摘要>`，不进入正式版清理树 |
+| 开机启动项 | `lib.rs` | 非正式 identifier 注册为 `Copy Creator (<identifier>)`，不会改写正式版启动项 |
+| 单实例锁 | `single_instance.rs` | 锁名取自 `hash(SID + identifier)`，QA 实例与正式版可并存且互不唤醒 |
+| 加速清理时钟 | `maintenance.rs` | 仅 `diagnostics` feature + 非正式 identifier 生效，正式标识与普通构建固定为生产间隔 |
+
+QA 包同样使用 ad-hoc/无签名，测试授权方式与验证包一致；它只用于隔离测试，NOT 用于分发。
 
 本轮已执行：actionlint 1.7.12 工作流检查通过（下载文件与上游 SHA-256 清单一致；Windows 上未执行 ShellCheck）；Git Bash `bash -n` 对全部 11 个 run 块语法检查通过；YAML 的手动触发/只读权限/三目标矩阵检查、受影响文档相对文件链接检查、`git diff --check` 通过。这些是此前准备轮的静态证据；本轮源码变更与自动回归结果见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)，不将 Windows 回归记为 macOS/Linux 构建通过。
 
