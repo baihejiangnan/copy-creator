@@ -20,6 +20,8 @@ Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runne
 
 成功打包的 artifact 名含 target 与完整 SHA，保留 14 天，仅含 DMG/DEB/AppImage、`SOURCE_COMMIT.txt`、`BUILD_INFO.txt` 和 `SHA256SUMS.txt`。上传目录保留包子目录，校验命令从 bundle 根执行 `shasum -a 256 -c SHA256SUMS.txt`；`.app` 位于 DMG 内，不单独上传以免 ZIP 破坏链接/权限。`validationOnly=true` 包不用于正式分发，原生测试和打包成功也不等于桌面验收通过。
 
+验证包生成后，手动运行 [Inspect validation packages](../../.github/workflows/inspect-platform-packages.yml)，`source_run_id` 填成功的构建 run ID。只接受本仓库 main 上成功的 readiness 工作流，按原构建完整 SHA 下载精确 artifact，用[完整性脚本](../../scripts/verify-platform-artifact.py)检查来源、target、文件集合、SHA-256、非空大小，拒绝篡改、缺包、重复/越界路径及额外文件；[平台脚本](../../scripts/inspect-platform-packages.sh)在对应 runner 只读挂载 DMG、检查 plist/架构/图标/Applications 链接/内部执行权限和 ad-hoc 签名，或解出 DEB/AppImage 检查依赖/桌面入口/图标/ELF 与 AppRun 权限。GitHub artifact ZIP 不保留外层执行位，下载的 AppImage 使用前须 `chmod +x`，内部 SquashFS 权限单独核对。检查不会启动应用或安装 DEB，不替代 FUSE 运行、Gatekeeper 下载后行为、公证或桌面验收。
+
 ## 当前源码差距
 
 基线源码为 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮基础修复及两轮 CI 缺陷修复均已推送，最终源码 `2f1b0c60cd90bfda309c5150a5c81804618a3670` 的[第三轮 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38109127150) 全通过：三个原生平台各 168 通过/3 默认忽略，前端 117/类型/完整 lint 与生产构建通过；Windows 自动回归 189 通过/6 默认忽略。CI 关闭打包，不代表安装或桌面功能通过。各轮失败、修复与边界详见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。

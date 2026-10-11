@@ -1,0 +1,66 @@
+name: Inspect validation packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful platform-readiness run containing validation artifacts
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inspect:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download fixed-source validation artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          metadata=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.conclusion == "success" and .path == ".github/workflows/platform-readiness.yml" and .head_repository.full_name == $repo and .head_branch == "main"' <<< "$metadata"
+          source_sha=$(jq -r .head_sha <<< "$metadata")
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          package_dir="$RUNNER_TEMP/platform-artifact"
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "validation-only-$BUILD_TARGET-$source_sha" --dir "$package_dir"
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/copy-creator/package.json?ref=$source_sha" > "$RUNNER_TEMP/source-package.json"
+          version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RUNNER_TEMP/source-package.json")
+          echo "PACKAGE_DIR=$package_dir" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$source_sha" >> "$GITHUB_ENV"
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Verify source, artifact set and SHA-256
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: python3 scripts/verify-platform-artifact.py "$PACKAGE_DIR" "$SOURCE_SHA" "$BUILD_TARGET"
+      - name: Install Linux inspection tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils
+      - name: Inspect native package structure
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: bash scripts/inspect-platform-packages.sh "$PACKAGE_DIR" "$BUILD_TARGET" "$PACKAGE_VERSION"
