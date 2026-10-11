@@ -1,4 +1,7 @@
 {
+  "secrets": {
+    "unavailable": "The system key store is unavailable or the original key is missing. Protected data could not be saved or read. Unlock the system key store and retry; use an encrypted backup to restore on another device."
+  },
   "lifecycle": {
     "saving": "Saving and preparing your operation…",
     "busy": "Another data operation is in progress. Please retry when it finishes.",
@@ -203,6 +206,7 @@
     "pasteFailed": "Filling could not finish. Select the input and retry, or use the Copy button.",
     "pasteRequiresElevation": "The target app is running as administrator, so automatic filling is blocked. The content has not been copied. Use Copy and paste manually, or restart Copy Creator as administrator and select the target again.",
     "pasteUnsupported": "Quick filling is currently available on Windows only.",
+    "copyUnsupported": "Private clipboard ownership and expiry are not yet supported on this platform. Nothing was copied.",
     "personalInfo": "Personal details & custom fields",
     "optional": "Optional",
     "personalHint": "Customize a preset or add any text information required by the website.",
@@ -435,6 +439,7 @@
     "busy": "Another clipboard operation is in progress. Please try again.",
     "copyFailed": "Could not copy to the clipboard. Please try again.",
     "pasteFailed": "Could not complete the paste. Please try again.",
+    "openLinkFailed": "Could not open the system browser. Check your default browser settings and retry.",
     "pasteRequiresElevation": "The target app is running as administrator, so automatic filling is blocked. The content is copied. Paste manually, or restart Copy Creator as administrator and select the target again.",
     "restartAsAdmin": "Restart as administrator",
     "restartAsAdminHint": "Save notes and settings, then request UAC permission. This run uses administrator privileges; a normal launch next time uses normal privileges.",

@@ -1337,6 +1337,8 @@ mod tests {
         let mut conn = db();
         for (kind, content, manual, expected) in [
             ("text", "dpapi:v1:fixture", false, "notes.protectedSource"),
+            ("text", "oskey:v1:fixture", false, "notes.protectedSource"),
+            ("text", "oskey:v99:fixture", false, "notes.protectedSource"),
             (
                 "text",
                 "sk-fixture-01234567890123456789",

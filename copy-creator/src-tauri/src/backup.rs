@@ -348,7 +348,7 @@ fn export_snapshot(conn: &Connection) -> Result<BackupBundle, String> {
         l.service, l.api_base, l.note, l.is_expired, l.created_at, l.updated_at
         FROM clipboard_records r LEFT JOIN api_key_labels l ON l.record_id = r.id
         WHERE r.is_favorite = 1 OR r.user_api_key = 1 OR l.record_id IS NOT NULL OR (r.type IN ('text', 'link') AND
-        (r.content LIKE 'dpapi:v1:%' OR r.content LIKE 'sk-%' OR r.content LIKE 'AIza%' OR r.content LIKE 'glpat-%' OR r.content LIKE 'ghp_%' OR r.content LIKE 'xai-%')) ORDER BY r.created_at DESC")
+        ((r.content LIKE 'dpapi:%' OR r.content LIKE 'oskey:%') OR r.content LIKE 'sk-%' OR r.content LIKE 'AIza%' OR r.content LIKE 'glpat-%' OR r.content LIKE 'ghp_%' OR r.content LIKE 'xai-%')) ORDER BY r.created_at DESC")
         .map_err(|_| "backup.databaseFailed")?;
     let rows = stmt
         .query_map([], |row| {
@@ -398,9 +398,9 @@ fn export_snapshot(conn: &Connection) -> Result<BackupBundle, String> {
 // Query lengths/counts before loading bodies/ciphertext. This is a lower-bound
 // admission check, followed by cumulative JSON accounting and exact writers.
 fn preflight_snapshot(conn: &Connection) -> Result<(), String> {
-    let predicate="r.is_favorite=1 OR r.user_api_key=1 OR l.record_id IS NOT NULL OR (r.type IN ('text','link') AND (r.content LIKE 'dpapi:v1:%' OR r.content LIKE 'sk-%' OR r.content LIKE 'AIza%' OR r.content LIKE 'glpat-%' OR r.content LIKE 'ghp_%' OR r.content LIKE 'xai-%'))";
+    let predicate="r.is_favorite=1 OR r.user_api_key=1 OR l.record_id IS NOT NULL OR (r.type IN ('text','link') AND ((r.content LIKE 'dpapi:%' OR r.content LIKE 'oskey:%') OR r.content LIKE 'sk-%' OR r.content LIKE 'AIza%' OR r.content LIKE 'glpat-%' OR r.content LIKE 'ghp_%' OR r.content LIKE 'xai-%'))";
     let queries=[
-        format!("SELECT COALESCE(SUM(CASE WHEN r.content LIKE 'dpapi:v1:%' THEN 0 ELSE length(CAST(r.content AS BLOB)) END + length(CAST(r.favorite_note AS BLOB)) + length(CAST(r.source_app AS BLOB))),0),count(*) FROM clipboard_records r LEFT JOIN api_key_labels l ON l.record_id=r.id WHERE {predicate}"),
+        format!("SELECT COALESCE(SUM(CASE WHEN (r.content LIKE 'dpapi:%' OR r.content LIKE 'oskey:%') THEN 0 ELSE length(CAST(r.content AS BLOB)) END + length(CAST(r.favorite_note AS BLOB)) + length(CAST(r.source_app AS BLOB))),0),count(*) FROM clipboard_records r LEFT JOIN api_key_labels l ON l.record_id=r.id WHERE {predicate}"),
         "SELECT COALESCE(SUM(length(CAST(title AS BLOB))+length(CAST(body AS BLOB))+COALESCE(length(CAST(source_json AS BLOB)),0)),0),count(*) FROM notes WHERE deleted_at_ms IS NULL".into(),
         "SELECT COALESCE(SUM(length(CAST(target AS BLOB))+length(CAST(display_name AS BLOB))),0),count(*) FROM note_refs WHERE note_id IN (SELECT id FROM notes WHERE deleted_at_ms IS NULL)".into(),
         "SELECT COALESCE(SUM(length(CAST(encrypted_data AS BLOB))),0),count(*) FROM vault_entries".into(),
@@ -1065,6 +1065,16 @@ mod tests {
         note_backup::init_schema(&conn).unwrap();
         crate::clipboard_usage::init_schema(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn unavailable_portable_secret_aborts_export_instead_of_being_omitted() {
+        for value in ["oskey:v1:opaque", "oskey:v99:opaque", "dpapi:v99:opaque"] {
+            let conn = connection();
+            conn.execute("INSERT INTO clipboard_records(id,type,content,created_at) VALUES('foreign','text',?1,'2020-01-01T00:00:00Z')", [value]).unwrap();
+            assert!(matches!(export_snapshot(&conn), Err(error) if error == "backup.secretUnavailable"));
+            assert_eq!(conn.query_row("SELECT content FROM clipboard_records WHERE id='foreign'", [], |row| row.get::<_, String>(0)).unwrap(), value);
+        }
     }
 
     fn seed_vault(

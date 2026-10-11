@@ -1,5 +1,7 @@
 mod clipboard;
 mod clipboard_wake;
+#[cfg(not(target_os = "windows"))]
+mod desktop_open;
 mod secrets;
 mod db;
 mod paste;
@@ -200,6 +202,17 @@ fn install_auto_hide_on_focus_loss(window: &tauri::WebviewWindow) {
     });
 }
 
+#[cfg(not(target_os = "windows"))]
+fn install_close_to_tray(window: &tauri::WebviewWindow) {
+    let event_window = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = lifecycle::hide_main(&event_window);
+        }
+    });
+}
+
 #[tauri::command]
 fn toggle_always_on_top(app: tauri::AppHandle) -> Result<bool, String> {
     let window = app
@@ -292,8 +305,15 @@ pub fn run() {
                 }
             }
 
+            #[cfg(not(target_os = "windows"))]
+            if let Some(window) = app.get_webview_window("main") {
+                install_close_to_tray(&window);
+                MAIN_WINDOW_PINNED.store(window.is_always_on_top().unwrap_or(false), Ordering::SeqCst);
+            }
+
             let is_autostart = std::env::args().any(|a| a == "--hidden");
 
+            secrets::initialize(&app.config().identifier, app.path().app_config_dir()?)?;
             db::init_db(app.handle())?;
             app.manage(vault::VaultState::default());
             app.manage(backup::BackupState::default());

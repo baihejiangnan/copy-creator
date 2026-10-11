@@ -172,9 +172,7 @@ mod url_tests {
 
 #[cfg(target_os = "windows")]
 const MAX_CLIPBOARD_FORMAT_BYTES: usize = 512 * 1024 * 1024;
-#[cfg(target_os = "windows")]
 const MAX_CLIPBOARD_RGBA_BYTES: usize = 256 * 1024 * 1024;
-#[cfg(target_os = "windows")]
 const MAX_CLIPBOARD_IMAGE_DIMENSION: u32 = 20_000;
 
 #[cfg(target_os = "windows")]
@@ -266,7 +264,6 @@ fn read_i32_le(bytes: &[u8], offset: usize) -> Option<i32> {
     ))
 }
 
-#[cfg(target_os = "windows")]
 fn checked_rgba_len(width: u32, height: u32) -> Option<usize> {
     if width == 0
         || height == 0
@@ -468,7 +465,7 @@ mod dib_tests {
 }
 
 #[tauri::command]
-pub fn open_external_link(url: String) -> Result<(), String> {
+pub async fn open_external_link(url: String) -> Result<(), String> {
     let url = url.trim();
     if !is_url(url) {
         return Err("Unsupported link protocol".to_string());
@@ -504,7 +501,10 @@ pub fn open_external_link(url: String) -> Result<(), String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        Err("Opening links is currently supported on Windows only".to_string())
+        let url = url.to_owned();
+        tauri::async_runtime::spawn_blocking(move || crate::desktop_open::open_link(&url))
+            .await.map_err(|_| "clipboard.openLinkFailed".to_string())?
+            .map_err(|_| "clipboard.openLinkFailed".into())
     }
 }
 
@@ -1130,6 +1130,74 @@ fn sync_monitor_cache_from_snapshot(text: Option<&str>) {
 pub fn sync_monitor_cache(handle: &AppHandle) {
     let text = read_clipboard_text_candidate(handle).map(|(text, _)| text);
     sync_monitor_cache_from_snapshot(text.as_deref());
+    #[cfg(not(target_os = "windows"))]
+    if let Some(snapshot) = read_portable_snapshot(handle) {
+        *LAST_PORTABLE_SNAPSHOT.lock().unwrap() = Some(snapshot.key);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+type PortableSnapshotKey = ([u8; 32], Option<isize>);
+#[cfg(not(target_os = "windows"))]
+static LAST_PORTABLE_SNAPSHOT: std::sync::Mutex<Option<PortableSnapshotKey>> = std::sync::Mutex::new(None);
+#[cfg(not(target_os = "windows"))]
+struct PortableSnapshot {
+    key: PortableSnapshotKey,
+    text: Option<(String, bool)>,
+    image: Option<(Vec<u8>, u32, u32)>,
+}
+
+#[cfg(any(not(target_os = "windows"), test))]
+fn snapshot_digest(text: Option<&str>, image: Option<(&[u8], u32, u32)>) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    if let Some(text) = text { hash.update([1]); hash.update((text.len() as u64).to_le_bytes()); hash.update(text.as_bytes()); }
+    if let Some((rgba, width, height)) = image { hash.update([2]); hash.update(width.to_le_bytes()); hash.update(height.to_le_bytes()); hash.update(rgba); }
+    hash.finalize().into()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_portable_snapshot(handle: &AppHandle) -> Option<PortableSnapshot> {
+    #[cfg(target_os = "macos")]
+    let generation = Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount());
+    #[cfg(not(target_os = "macos"))]
+    let generation = None;
+    // macOS can detect identical content copied again without decoding images
+    // every watchdog tick. Linux currently uses bounded content polling.
+    if generation.is_some() && LAST_PORTABLE_SNAPSHOT.lock().unwrap().as_ref().is_some_and(|key| key.1 == generation) {
+        return None;
+    }
+    let text = read_clipboard_text_candidate(handle);
+    if text.as_ref().is_some_and(|(text, _)| text.len() > 16 * 1024 * 1024) { return None; }
+    let prefer_text = text.as_ref().is_some_and(|(text, sheet)| should_prefer_text_over_image(text, *sheet));
+    let image = if prefer_text { None } else {
+        handle.clipboard().read_image().ok().and_then(|image| {
+            let width = image.width(); let height = image.height();
+            let size = checked_rgba_len(width, height)?;
+            (image.rgba().len() == size).then(|| (image.rgba().to_vec(), width, height))
+        })
+    };
+    // No readable supported format may be a transient permission/owner error.
+    // Do not acknowledge that generation and suppress a later successful read.
+    if text.is_none() && image.is_none() { return None; }
+    #[cfg(target_os = "macos")]
+    if Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount()) != generation { return None; }
+    let digest = snapshot_digest(text.as_ref().map(|(text, _)| text.as_str()), image.as_ref().map(|(rgba, w, h)| (rgba.as_slice(), *w, *h)));
+    Some(PortableSnapshot { key: (digest, generation), text, image })
+}
+
+#[cfg(test)]
+mod portable_snapshot_tests {
+    use super::*;
+    #[test]
+    fn fingerprint_covers_full_image_dimensions_and_text() {
+        let a = vec![7; 800]; let mut b = a.clone(); b[799] = 9;
+        assert_ne!(snapshot_digest(None, Some((&a, 20, 10))), snapshot_digest(None, Some((&b, 20, 10))));
+        assert_ne!(snapshot_digest(None, Some((&a, 20, 10))), snapshot_digest(None, Some((&a, 10, 20))));
+        assert_ne!(snapshot_digest(Some("a"), None), snapshot_digest(Some("b"), None));
+        assert_ne!(snapshot_digest(Some(""), None), snapshot_digest(None, None));
+        assert!(checked_rgba_len(20_000, 20_000).is_none());
+    }
 }
 
 // Serialize our private clipboard transaction against the monitor's text snapshot.
@@ -1171,6 +1239,9 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         LAST_CLIPBOARD_SEQ.store(get_clipboard_sequence(), Ordering::SeqCst);
     }
 
+    #[cfg(not(target_os = "windows"))]
+    sync_monitor_cache(&handle);
+
     std::thread::spawn(move || {
         let mut wake = crate::clipboard_wake::ClipboardWake::new();
         let startup = std::time::Instant::now();
@@ -1194,6 +1265,8 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
 
             // Detect clipboard changes via Windows sequence number.
             // This catches re-copies of identical content (e.g. same image twice).
+            #[cfg(not(target_os = "windows"))]
+            let portable_snapshot = read_portable_snapshot(&handle);
             let seq_changed = {
                 #[cfg(target_os = "windows")]
                 {
@@ -1213,7 +1286,10 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    false
+                    portable_snapshot.as_ref().is_some_and(|snapshot| {
+                        let mut last = LAST_PORTABLE_SNAPSHOT.lock().unwrap();
+                        if *last == Some(snapshot.key) { false } else { *last = Some(snapshot.key); true }
+                    })
                 }
             };
 
@@ -1226,7 +1302,10 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             let _cleanup = LimitCleanup(&handle);
             let _activity = crate::db::image_activity();
 
+            #[cfg(target_os = "windows")]
             let text_candidate = read_clipboard_text_candidate(&handle);
+            #[cfg(not(target_os = "windows"))]
+            let PortableSnapshot { text: text_candidate, image: portable_image, .. } = portable_snapshot.unwrap();
             drop(capture);
             if let Some((text, has_spreadsheet_format)) = text_candidate.as_ref() {
                 if should_prefer_text_over_image(text, *has_spreadsheet_format) {
@@ -1266,21 +1345,7 @@ pub fn start_monitor(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> 
 
             #[cfg(not(target_os = "windows"))]
             {
-                // Non-Windows: use plugin-based image read with RGBA hash
-                if let Ok(image) = handle.clipboard().read_image() {
-                    let rgba = image.rgba();
-                    if !rgba.is_empty() && image.width() > 0 && image.height() > 0 {
-                        let hash = rgba
-                            .iter()
-                            .take(400)
-                            .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64));
-                        let mut cached_hash = LAST_CLIPBOARD_IMAGE_HASH.lock().unwrap();
-                        if hash != *cached_hash {
-                            *cached_hash = hash;
-                            image_data = Some((rgba.to_vec(), image.width(), image.height()));
-                        }
-                    }
-                }
+                image_data = portable_image;
             }
 
             if let Some((rgba_vec, img_w, img_h)) = image_data.take() {

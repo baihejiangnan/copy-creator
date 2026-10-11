@@ -1,4 +1,7 @@
 {
+  "secrets": {
+    "unavailable": "系统密钥库不可用或原密钥缺失，无法保存或读取受保护资料。请解锁系统密钥库后重试；跨设备恢复请使用加密备份。"
+  },
   "lifecycle": {
     "saving": "正在保存并准备操作…",
     "busy": "另一个数据操作正在进行，请完成后重试。",
@@ -203,6 +206,7 @@
     "pasteFailed": "填入未完成。请重新选择输入框后重试，或使用复制按钮。",
     "pasteRequiresElevation": "目标程序以管理员权限运行，无法自动填入。内容尚未复制，可使用复制按钮后手动粘贴，或以管理员权限重启 Copy Creator 后重新选择目标填入。",
     "pasteUnsupported": "快速填入目前仅支持 Windows。",
+    "copyUnsupported": "当前平台尚未支持私密剪贴板的归属保护与到期清除，未复制资料。",
     "personalInfo": "个人资料与自定义字段",
     "optional": "可选",
     "personalHint": "预设模板可以自由修改，也可以添加网站要求的任何文字资料。",
@@ -435,6 +439,7 @@
     "busy": "剪贴板正在处理另一项操作，请稍后重试。",
     "copyFailed": "无法复制到剪贴板，请重试。",
     "pasteFailed": "无法完成粘贴，请重试。",
+    "openLinkFailed": "无法打开系统浏览器，请检查默认浏览器设置后重试。",
     "pasteRequiresElevation": "目标程序以管理员权限运行，无法自动填入。内容已复制，可手动粘贴，或以管理员权限重启 Copy Creator 后重新选择目标填入。",
     "restartAsAdmin": "以管理员权限重启",
     "restartAsAdminHint": "先保存便签和设置，再请求 UAC 授权。本次以管理员权限运行，下次普通启动仍使用普通权限。",

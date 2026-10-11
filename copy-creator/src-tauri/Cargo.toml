@@ -45,6 +45,12 @@ argon2 = "0.5.3"
 rand = "0.9.5"
 zeroize = "1.8.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+tauri-plugin-process = "2.3.1"
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-notification = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Security_Cryptography",
@@ -63,9 +69,16 @@ windows = { version = "0.58", features = [
   "Win32_UI_Shell_Common",
   "Win32_UI_Accessibility",
 ] }
-tauri-plugin-process = "2.3.1"
-tauri-plugin-autostart = "2.5.1"
-tauri-plugin-notification = "2"
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "=3.6.3", features = ["apple-native"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
 
-[target.'cfg(windows)'.dependencies]
-winreg = "0.55"
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+dbus = "0.9.11"
+
+[target.'cfg(unix)'.dependencies]
+fs2 = "0.4.3"
+
+[dev-dependencies]
+fs2 = "0.4.3"

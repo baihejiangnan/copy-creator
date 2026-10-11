@@ -179,7 +179,8 @@ export const useSettingsEditorStore = create<EditorState>((set, get) => ({
         });
       } catch (error) {
         if ((revisions[field] ?? 0) === revision) set((state) => ({ errors: { ...state.errors,
-          [field]: error === "settings.shortcutUnavailable" ? "settings.shortcutUnavailable" : "settings.autoSaveFailed" } }));
+          [field]: error === "settings.shortcutUnavailable" ? "settings.shortcutUnavailable"
+            : error === "secrets.unavailable" ? "secrets.unavailable" : "settings.autoSaveFailed" } }));
       }
     }).finally(() => {
       if (submitted.get(field) === revision) submitted.delete(field);

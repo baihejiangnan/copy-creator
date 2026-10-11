@@ -1,0 +1,143 @@
+name: macOS and Linux readiness
+
+# Preparation only: no tag/push trigger, signing secrets, or Release writes.
+on:
+  workflow_dispatch:
+    inputs:
+      build_packages:
+        description: Build validation packages after checks (not for publication)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-readiness-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: '1.98.1'
+
+defaults:
+  run:
+    shell: bash
+    working-directory: copy-creator
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.19.0'
+          cache: pnpm
+          cache-dependency-path: copy-creator/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc -b
+      - run: pnpm test:unit
+      - run: pnpm lint
+
+  native:
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.19.0'
+          cache: pnpm
+          cache-dependency-path: copy-creator/pnpm-lock.yaml
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config curl wget file \
+            libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxtst-dev libdbus-1-dev patchelf xdg-utils xvfb
+      - name: Select Rust toolchain and target
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup override set "$RUST_VERSION"
+          rustup target add "$BUILD_TARGET"
+          rustc --version
+          cargo --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Native tests
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a cargo test --locked --manifest-path src-tauri/Cargo.toml --target "$BUILD_TARGET"
+          else
+            cargo test --locked --manifest-path src-tauri/Cargo.toml --target "$BUILD_TARGET"
+          fi
+      - name: Build validation packages
+        if: inputs.build_packages
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_BUNDLES: ${{ matrix.bundles }}
+          # Local ad-hoc signature only; not Developer ID or notarization.
+          APPLE_SIGNING_IDENTITY: '-'
+        run: pnpm exec tauri build --ci --target "$BUILD_TARGET" --bundles "$BUILD_BUNDLES" -- --locked
+      - name: Record source and checksums
+        if: inputs.build_packages
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          test -z "$(git status --porcelain --untracked-files=no)"
+          bundle_dir="src-tauri/target/$BUILD_TARGET/release/bundle"
+          git rev-parse HEAD > "$bundle_dir/SOURCE_COMMIT.txt"
+          printf 'validationOnly=true\ntarget=%s\nrunner=%s\n' "$BUILD_TARGET" "$RUNNER_OS" > "$bundle_dir/BUILD_INFO.txt"
+          node --version >> "$bundle_dir/BUILD_INFO.txt"
+          pnpm --version >> "$bundle_dir/BUILD_INFO.txt"
+          rustc --version >> "$bundle_dir/BUILD_INFO.txt"
+          cd "$bundle_dir"
+          find . -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) -print0 |
+            while IFS= read -r -d '' package; do shasum -a 256 "$package"; done > SHA256SUMS.txt
+          test -s SHA256SUMS.txt
+      - name: Upload validation packages
+        if: inputs.build_packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: validation-only-${{ matrix.target }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            copy-creator/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            copy-creator/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            copy-creator/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            copy-creator/src-tauri/target/${{ matrix.target }}/release/bundle/SOURCE_COMMIT.txt
+            copy-creator/src-tauri/target/${{ matrix.target }}/release/bundle/BUILD_INFO.txt
+            copy-creator/src-tauri/target/${{ matrix.target }}/release/bundle/SHA256SUMS.txt

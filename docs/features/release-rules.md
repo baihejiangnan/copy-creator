@@ -29,6 +29,8 @@
 
 ## 3. 构建签名
 
+本节脚本和六文件合同适用于 Windows x64。macOS / Linux 当前仅进入[跨平台发行准备](cross-platform-release.md)，手动 CI 为验证入口，不能按本节 Windows 脚本或六文件规则直接公开跨平台包；联合发行须先补齐平台实现、签名/安装验收和资产验证合同。
+
 从内层 `copy-creator/` 执行，依赖用 `pnpm install --frozen-lockfile`，Cargo 保持锁定。不顺手升级依赖或修改应用 identifier。
 
 环境要求：Windows x64、PowerShell 7 的 pwsh 在 PATH、Node/pnpm/Rust/MSVC 与 WindowsInstaller COM 可用，临时目录可写且工具允许启动构建子进程。当前脚本使用默认 Cargo target 路径；不指定 target 或自定义 CARGO_TARGET_DIR/CARGO_BUILD_TARGET、.cargo/config.toml 的 target-dir/build.target，其他目标需先适配验证脚本。本机包装日志与临时目录示例见 [环境处理](../problems_and_solutions.md#windows-构建环境与临时目录)。

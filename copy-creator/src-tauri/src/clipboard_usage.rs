@@ -100,7 +100,7 @@ pub(crate) fn cleanup_batch(conn: &mut Connection, max_items: u64, max_bytes: u6
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let candidates = {
         let mut statement = tx.prepare("SELECT id,CASE WHEN type='image' THEN content END FROM clipboard_records
-            WHERE is_favorite=0 AND user_api_key=0 AND content NOT LIKE 'dpapi:v1:%'
+            WHERE is_favorite=0 AND user_api_key=0 AND content NOT LIKE 'dpapi:%' AND content NOT LIKE 'oskey:%'
             AND NOT EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id=clipboard_records.id)
             ORDER BY created_at ASC,id ASC LIMIT 100")?;
         let rows = statement.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<String>>(1)?)))?;
@@ -186,5 +186,16 @@ mod tests {
         assert!(cleanup_batch(&mut conn,0,0).is_err());
         assert_eq!(get(&conn).unwrap().records,2);
         assert_eq!(get(&conn).unwrap().bytes,520);
+    }
+
+    #[test]
+    fn cleanup_preserves_portable_and_unknown_protected_envelopes() {
+        let mut conn = cleanup_db();
+        for (id, content) in [("portable", "oskey:v1:opaque"), ("future", "oskey:v99:opaque"), ("future-windows", "dpapi:v99:opaque"), ("ordinary", "text")] {
+            conn.execute("INSERT INTO clipboard_records(id,type,content) VALUES(?1,'text',?2)", rusqlite::params![id, content]).unwrap();
+        }
+        assert_eq!(cleanup_batch(&mut conn, 0, 0).unwrap().len(), 1);
+        assert!(cleanup_batch(&mut conn, 0, 0).unwrap().is_empty());
+        assert_eq!(get(&conn).unwrap().records, 3);
     }
 }

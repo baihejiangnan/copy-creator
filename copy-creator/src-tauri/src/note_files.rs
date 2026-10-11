@@ -82,7 +82,7 @@ pub async fn reveal_note_reference(app:AppHandle,expected_storage_epoch:u64,id:S
             reveal_path(path,metadata.is_dir())?;
         }
         #[cfg(not(target_os="windows"))]
-        {let _=metadata; return Err("notes.fileOpenFailed".into());}
+        {crate::desktop_open::reveal_path(path,metadata.is_dir()).map_err(|_| "notes.fileOpenFailed")?;}
         Ok(())
     }).await.map_err(|_| "notes.fileOpenFailed")?
 }

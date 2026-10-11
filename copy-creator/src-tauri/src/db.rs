@@ -67,8 +67,8 @@ fn category_sql(category: &Option<String>) -> (String, String) {
             "AND is_favorite = 1".to_string(),
         ),
         Some("apikey") => (
-            "WHERE (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'dpapi:v1:%' OR content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
-            "AND (user_api_key = 1 OR (type IN ('text', 'link') AND (content LIKE 'dpapi:v1:%' OR content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
+            "WHERE (user_api_key = 1 OR (type IN ('text', 'link') AND ((content LIKE 'dpapi:%' OR content LIKE 'oskey:%') OR content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
+            "AND (user_api_key = 1 OR (type IN ('text', 'link') AND ((content LIKE 'dpapi:%' OR content LIKE 'oskey:%') OR content LIKE 'sk-%' OR content LIKE 'AIza%' OR content LIKE 'glpat-%' OR content LIKE 'ghp_%' OR content LIKE 'xai-%')))".to_string(),
         ),
         _ => ("".to_string(), "".to_string()),
     }
@@ -422,7 +422,7 @@ struct UsageRecord {
 fn load_usage_records(conn: &Connection) -> Result<Vec<UsageRecord>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, type, content, is_favorite, (user_api_key = 1 OR content LIKE 'dpapi:v1:%' OR EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = clipboard_records.id)) FROM clipboard_records ORDER BY created_at ASC",
+            "SELECT id, type, content, is_favorite, (user_api_key = 1 OR (content LIKE 'dpapi:%' OR content LIKE 'oskey:%') OR EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = clipboard_records.id)) FROM clipboard_records ORDER BY created_at ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -497,7 +497,7 @@ fn plan_limit_cleanup_metadata(conn: &Connection, max_items: u64, max_bytes: u64
         CASE WHEN r.type<>'image' THEN length(CAST(r.content AS BLOB)) ELSE 0 END,
         COALESCE(a.ref_count,0),COALESCE(a.byte_size,0)
         FROM clipboard_records r LEFT JOIN clipboard_assets a ON r.type='image' AND a.path=r.content
-        WHERE r.is_favorite=0 AND r.user_api_key=0 AND r.content NOT LIKE 'dpapi:v1:%'
+        WHERE r.is_favorite=0 AND r.user_api_key=0 AND r.content NOT LIKE 'dpapi:%' AND r.content NOT LIKE 'oskey:%'
         AND NOT EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id=r.id)
         ORDER BY r.created_at,r.id")?;
     let mut rows=statement.query([])?;
@@ -897,7 +897,7 @@ fn prune_expired_records(conn: &Connection, days: i64) -> rusqlite::Result<Vec<(
     let tx = conn.unchecked_transaction()?;
     let records = {
         let mut stmt = tx.prepare("SELECT id, type, CASE WHEN type='image' THEN content ELSE '' END FROM clipboard_records WHERE is_favorite = 0
-            AND user_api_key = 0 AND content NOT LIKE 'dpapi:v1:%'
+            AND user_api_key = 0 AND content NOT LIKE 'dpapi:%' AND content NOT LIKE 'oskey:%'
             AND NOT EXISTS(SELECT 1 FROM api_key_labels l WHERE l.record_id = clipboard_records.id)
             AND datetime(created_at) < datetime('now', ?1) ORDER BY created_at,id LIMIT 100")?;
         let rows = stmt.query_map(params![format!("-{days} days")], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?;
@@ -3122,6 +3122,8 @@ mod tests {
             ('ordinary', 'text', 'Old ordinary text', 0, 0, '2020-01-01T00:00:00Z'),
             ('manual-key', 'text', 'Manual key', 1, 0, '2020-01-01T00:00:00Z'),
             ('protected-key', 'text', 'dpapi:v1:ciphertext', 0, 0, '2020-01-01T00:00:00Z'),
+            ('portable-key', 'text', 'oskey:v1:ciphertext', 0, 0, '2020-01-01T00:00:00Z'),
+            ('future-key', 'text', 'oskey:v99:ciphertext', 0, 0, '2020-01-01T00:00:00Z'),
             ('labeled-key', 'text', 'Labeled key', 0, 0, '2020-01-01T00:00:00Z'),
             ('favorite', 'text', 'Favorite', 0, 1, '2020-01-01T00:00:00Z');
             INSERT INTO api_key_labels VALUES ('labeled-key');").unwrap();
@@ -3131,7 +3133,7 @@ mod tests {
         assert_eq!(records.iter().filter(|record| record.is_favorite).count(), 1);
         let deleted = prune_expired_records(&conn, 30).unwrap();
         assert_eq!(deleted.len(), 1); assert_eq!(deleted[0].0, "ordinary");
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get::<_, i64>(0)).unwrap(), 4);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM clipboard_records", [], |row| row.get::<_, i64>(0)).unwrap(), 6);
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM api_key_labels", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
     }
 

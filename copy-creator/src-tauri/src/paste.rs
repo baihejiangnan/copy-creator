@@ -28,22 +28,27 @@ pub fn clear_sensitive_clipboard() {
 }
 
 pub fn copy_sensitive_text(app: AppHandle, text: String) -> Result<(), String> {
-    if PASTING.swap(true, Ordering::SeqCst) { return Err("vault.clipboardBusy".into()); }
-    let _guard = PasteGuard;
-    let text = zeroize::Zeroizing::new(text);
-    write_sensitive_clipboard(&app, &text).map(|_| ())
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Native ownership/expiry support must precede any private write.
+        // Do not expose credentials through the ordinary plugin clipboard.
+        let _ = (app, zeroize::Zeroizing::new(text));
+        return Err("vault.copyUnsupported".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if PASTING.swap(true, Ordering::SeqCst) { return Err("vault.clipboardBusy".into()); }
+        let _guard = PasteGuard;
+        let text = zeroize::Zeroizing::new(text);
+        write_sensitive_clipboard(&app, &text).map(|_| ())
+    }
 }
 
 // The caller keeps PasteGuard alive for the entire copy / focus / paste operation.
+#[cfg(target_os = "windows")]
 fn write_sensitive_clipboard(app: &AppHandle, text: &str) -> Result<u32, String> {
     let _capture = crate::clipboard::capture_guard();
-    #[cfg(target_os = "windows")]
     let sequence = write_private_clipboard_text(app, text)?;
-    #[cfg(not(target_os = "windows"))]
-    let sequence = {
-        app.clipboard().write_text(text).map_err(|_| "vault.copyFailed")?;
-        0
-    };
     SENSITIVE_CLIPBOARD_SEQUENCE.store(sequence, Ordering::SeqCst);
     crate::clipboard::sync_monitor_cache(app);
     std::thread::spawn(move || {
@@ -814,6 +819,11 @@ fn load_image_for_clipboard(app: &AppHandle, path: &str) -> Result<ClipboardImag
 }
 
 fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|session| session == "wayland") {
+        return Err("clipboard.pasteFailed".into());
+    }
     #[cfg(target_os = "windows")]
     let clipboard_sequence = unsafe {
         windows::Win32::System::DataExchange::GetClipboardSequenceNumber()
@@ -837,6 +847,13 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
     }
 
     let window = app.get_webview_window("main").ok_or("no window")?;
+
+    #[cfg(not(target_os = "windows"))]
+    if window.is_always_on_top().unwrap_or(true) {
+        // Without a native target tracker a pinned panel must not receive its
+        // own synthetic paste. Keep copied content available for manual paste.
+        return Err("clipboard.pasteFailed".into());
+    }
 
     if !window.is_always_on_top().unwrap_or(false) {
         crate::lifecycle::hide_main(&window).map_err(|e| e.to_string())?;
@@ -878,6 +895,7 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         thread::sleep(Duration::from_millis(200));
+        if window.is_focused().unwrap_or(true) { return Err("clipboard.pasteFailed".into()); }
     }
 
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
@@ -924,24 +942,46 @@ fn paste_with_defocus(app: &AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        enigo
-            .key(Key::Meta, Direction::Press)
-            .map_err(|e| e.to_string())?;
-        thread::sleep(Duration::from_millis(30));
-        enigo
-            .key(Key::V, Direction::Press)
-            .map_err(|e| e.to_string())?;
-        thread::sleep(Duration::from_millis(10));
-        enigo
-            .key(Key::V, Direction::Release)
-            .map_err(|e| e.to_string())?;
-        thread::sleep(Duration::from_millis(10));
-        enigo
-            .key(Key::Meta, Direction::Release)
-            .map_err(|e| e.to_string())?;
+        send_paste_chord(|key, direction| enigo.key(key, direction).map_err(|_| ()), Key::Meta)
+            .map_err(|_| "clipboard.pasteFailed")?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        send_paste_chord(|key, direction| enigo.key(key, direction).map_err(|_| ()), Key::Control)
+            .map_err(|_| "clipboard.pasteFailed")?;
     }
 
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+fn send_paste_chord(mut send: impl FnMut(Key, Direction) -> Result<(), ()>, modifier: Key) -> Result<(), ()> {
+    let pressed = send(modifier, Direction::Press);
+    let pasted = pressed.and_then(|()| {
+        thread::sleep(Duration::from_millis(30));
+        send(Key::V, Direction::Click)
+    });
+    // Always attempt release, including a failed press/click. Never retry V.
+    let released = send(modifier, Direction::Release);
+    pasted.and(released)
+}
+
+#[cfg(test)]
+mod portable_chord_tests {
+    use super::*;
+    #[test]
+    fn paste_failure_releases_modifier_and_never_retries_v() {
+        for fail_at in 0..3 {
+            let mut calls = Vec::new();
+            let result = send_paste_chord(|key, direction| {
+                calls.push((key, direction));
+                if calls.len() - 1 == fail_at { Err(()) } else { Ok(()) }
+            }, Key::Control);
+            assert!(result.is_err());
+            assert!(matches!(calls.last(), Some((Key::Control, Direction::Release))));
+            assert!(calls.iter().filter(|(key, _)| matches!(key, Key::V)).count() <= 1);
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
