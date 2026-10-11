@@ -1,6 +1,6 @@
 # Copy Creator — 产品架构文档
 
-平台边界（2026-10-11）：本轮按目标限定 Windows DPAPI 与依赖；macOS Keychain/Linux Secret Service 存放按应用 identifier 隔离的随机数据密钥，SQLite 仅存绑定 identifier/密钥 UUID 的 AES-GCM 密文。配置目录的公开密钥 ID 在系统密钥写入/回读后原子发布，跨进程文件锁防止初始化竞争，缺失旧密钥拒绝写入，旧 DPAPI 与未知密文不降级明文。分类、清理、备份与便签保护同时识别两类密文。macOS 采集使用变化计数，Linux 先接内容指纹轮询；非 Windows 私密复制因归属/到期支持未完成而在写入前拒绝。链接/文件定位、关闭到托盘与普通粘贴分支已补，真实目标编译/焦点/单实例和性能仍待验。Windows 117 前端/188 Rust 回归通过（6 默认忽略），详见[跨平台发行准备](../features/cross-platform-release.md)及[首轮验证](../verification/2026-10-11-cross-platform-foundation.md)，不将下文 macOS 设计视为已有运行证据。
+平台边界（2026-10-11）：本轮按目标限定 Windows DPAPI 与依赖；macOS Keychain/Linux Secret Service 存放按应用 identifier 隔离的随机数据密钥，SQLite 仅存绑定 identifier/密钥 UUID 的 AES-GCM 密文。配置目录的公开密钥 ID 在系统密钥写入/回读后原子发布，跨进程文件锁防止初始化竞争，缺失旧密钥拒绝写入，旧 DPAPI 与未知密文不降级明文。分类、清理、备份与便签保护同时识别两类密文。macOS 采集使用变化计数，Linux 先接内容指纹轮询；非 Windows 私密复制因归属/到期支持未完成而在写入前拒绝。链接/文件定位、关闭到托盘与普通粘贴分支已补；文件引用作为跨系统数据保留外来绝对路径，真正打开时仍检查原生路径。macOS ARM64/Intel、Linux x64 原生 CI 各 168 通过/3 默认忽略，Windows 189 通过/6 默认忽略、前端 117 通过。真实系统密钥库、焦点/单实例、桌面与性能仍待验，尚未打包。详见[跨平台发行准备](../features/cross-platform-release.md)及[首轮验证](../verification/2026-10-11-cross-platform-foundation.md)，不将下文 macOS 设计视为已有运行证据。
 
 2026-10-10 生命周期续接：剪贴板 store 统一拥有五个原生监听和存储身份订阅，在 WebView unload/HMR 释放，身份读取迟到不得继续查询；普通页面卸载保持共享 store。便签编辑器 groups 由父页面提供，不创建第二组订阅。密码箱复制/填入提示共用可取消计时器并保留 epoch 守卫。自动证据及桌面权限边界见[P2 验证](../verification/2026-10-10-p2-lifetimes.md)。
 

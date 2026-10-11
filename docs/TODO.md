@@ -20,7 +20,7 @@
 
 ## 两个任务与依赖
 
-- [ ] **macOS / Linux Release 准备（2026-10-11）**：手动 CI 覆盖 macOS ARM64/Intel 与 Linux x64，不自动发行。首轮源码已按平台隔离 DPAPI，接入 Keychain/Secret Service + AES-GCM 认证密文与密钥缺失拒绝，并同步 Key 分类/清理/备份/便签保护；补 macOS 变化计数、Linux 文本/图片指纹轮询、Linux 普通粘贴按键、修饰键失败释放、链接/文件定位与关闭到托盘。非 Windows 私密复制在原生写入前明确拒绝，不能当成私密功能完成。Windows 前端 117、Rust 188 通过/6 默认忽略、完整 lint/构建、原生 check 通过；首轮系统 Temp 失败已改隔离目录重跑。macOS/Linux 原生编译与密钥库/桌面验收未执行，Docker Linux 引擎不可连接。Linux 相同内容重复制/原生事件、私密归属与到期清理、原生文件格式、非 Windows 单实例/焦点与 Wayland 等仍阻塞发行；没有提交、推送、标签或公开。设计与剩余差距见[跨平台发行准备](features/cross-platform-release.md)，命令和边界见[首轮验证](verification/2026-10-11-cross-platform-foundation.md)。
+- [ ] **macOS / Linux Release 准备（2026-10-11）**：基础实现及两轮 CI 修复已提交推送 `origin/main`，最终源码 `2f1b0c6` 的[第三轮 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38109127150) 全通过；macOS ARM64、Intel、Linux x64 各 168 Rust 通过/3 默认忽略，前端 117、类型、完整 lint 与三个目标生产前端构建通过。Windows 全量 Rust 189 通过/6 默认忽略、备份专项 24、原生 check 通过。已隔离 DPAPI，接入 Keychain/Secret Service + AES-GCM 与密钥缺失拒绝，同步清理/备份/便签保护；补采集、普通粘贴、链接/文件定位与关闭到托盘；修复跨平台按键枚举、macOS 透明配置，以及外来绝对文件引用导致备份拒绝/无法编辑。非 Windows 私密复制在写入前明确拒绝，不能算功能完成。Linux 相同内容重复制/原生事件、私密归属与到期清理、原生文件格式、非 Windows 单实例/焦点与 Wayland 等仍阻塞发行；真实系统密钥库及桌面验收未执行。本轮 CI 关闭打包，未生成安装包、打标签或发布 Release。设计与剩余差距见[跨平台发行准备](features/cross-platform-release.md)，失败及成功证据见[首轮验证](verification/2026-10-11-cross-platform-foundation.md)。
 
 - [ ] **随记整合桌面实现（2026-10-10）**：用户已授权由 HTML 进入工程改版并选名「随记」。统一列表、快速草稿/模块内展开、正文点击粘贴、右下角及右键编辑/常用、标题/分组、受限滚动分组菜单和管理、默认 Ctrl+Alt+N 的可配置全局新建已接入；schema 6 旧短语提升、v4 组织备份和搬迁已实现。前端 83/83、Rust 165 通过/5 忽略、类型/完整 lint/前端构建通过。独立桌面已验证迁移、编辑/自动保存、重复快捷键、展开、分组滚动/归属和无标题未分组捕获。用户 Esc 停止桌面操作，外部实际粘贴、设置快捷键录制/冲突及最终主题/最小窗联合回归待验，故不整勾。末轮 4 格式剪贴板恢复校验、QA 原生进程为零、正式版恢复；前轮 8 格式恢复缺回执，不能确认。详见[实现与验证](verification/2026-10-10-suiji.md)。源码已包含于本地提交 `0746faa`，尚未推送或发行。
 

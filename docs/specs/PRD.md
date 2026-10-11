@@ -23,7 +23,7 @@
 | 产品形态 | 桌面小窗 + 侧边栏面板，关闭后驻留系统托盘 |
 | 核心功能 | 剪切板管理、随记（记录与快捷粘贴）、翻译、网站资料 |
 | 目标平台 | Windows 11、macOS |
-| 平台交付状态 | 当前正式发行仅 Windows x64；macOS 与 Linux x64 进入构建/移植准备，尚未承诺可用。范围与缺口见[跨平台发行准备](../features/cross-platform-release.md) |
+| 平台交付状态 | 当前正式发行仅 Windows x64；macOS ARM64/Intel、Linux x64 原生编译与默认单测 CI 已通过，仍处于移植准备，未生成安装包或完成桌面验收，尚未承诺可用。范围与缺口见[跨平台发行准备](../features/cross-platform-release.md) |
 | 产品模式 | 开源免费 |
 | 设计规范 | iOS 风格（磨砂玻璃、圆角卡片、SF 字体） |
 

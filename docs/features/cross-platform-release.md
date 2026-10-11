@@ -22,7 +22,7 @@ Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runne
 
 ## 当前源码差距
 
-基线源码为 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮修复提交为 `4cf3965f1384b442f8f7a5276c537e796c2517e8`，已推送并运行原生 CI；Windows 自动回归通过。各轮编译修复、CI 与桌面验证边界详见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
+基线源码为 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮基础修复及两轮 CI 缺陷修复均已推送，最终源码 `2f1b0c60cd90bfda309c5150a5c81804618a3670` 的[第三轮 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38109127150) 全通过：三个原生平台各 168 通过/3 默认忽略，前端 117/类型/完整 lint 与生产构建通过；Windows 自动回归 189 通过/6 默认忽略。CI 关闭打包，不代表安装或桌面功能通过。各轮失败、修复与边界详见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
 
 | 范围 | 本轮实现 | 剩余要求 |
 | --- | --- | --- |
