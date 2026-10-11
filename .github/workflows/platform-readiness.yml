@@ -111,6 +111,14 @@ jobs:
           xvfb-run -a cargo test --locked --manifest-path src-tauri/Cargo.toml --target "$BUILD_TARGET" \
             --lib clipboard_files::linux::tests::native_file_formats_and_identical_recopy \
             -- --ignored --exact --test-threads=1
+      - name: Isolated macOS native file clipboard and recopy test
+        if: runner.os == 'macOS'
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --target "$BUILD_TARGET" \
+            --lib clipboard_files::tests::native_mac_file_formats_and_identical_recopy \
+            -- --ignored --exact --test-threads=1
       - name: Build validation packages
         if: inputs.build_packages
         env:

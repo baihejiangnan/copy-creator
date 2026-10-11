@@ -1175,9 +1175,10 @@ fn portable_generation() -> Option<isize> {
 #[cfg(not(target_os = "windows"))]
 fn read_portable_snapshot(handle: &AppHandle) -> Option<PortableSnapshot> {
     let generation = portable_generation();
-    // Skip decoding when the native change counter is unchanged. A content
-    // fingerprint remains the fallback if native notifications are unavailable.
-    if generation.is_some() && LAST_PORTABLE_SNAPSHOT.lock().unwrap().as_ref().is_some_and(|key| key.1 == generation) {
+    // AppKit's counter can skip decoding. GTK owner notifications can be
+    // incomplete in background Wayland sessions, so Linux's watchdog must
+    // still read content even when its notification counter is unchanged.
+    if cfg!(target_os = "macos") && generation.is_some() && LAST_PORTABLE_SNAPSHOT.lock().unwrap().as_ref().is_some_and(|key| key.1 == generation) {
         return None;
     }
     let files = crate::clipboard_files::read(handle).ok()?;

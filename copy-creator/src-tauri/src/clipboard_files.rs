@@ -99,8 +99,13 @@ fn encode_list(paths: &[String]) -> Result<String, ()> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn write(_app: &tauri::AppHandle, paths: &[String]) -> Result<(), ()> {
+    write_mac_board(&objc2_app_kit::NSPasteboard::generalPasteboard(), paths)
+}
+
+#[cfg(target_os = "macos")]
+fn write_mac_board(board: &objc2_app_kit::NSPasteboard, paths: &[String]) -> Result<(), ()> {
     use objc2::{rc::autoreleasepool, runtime::ProtocolObject};
-    use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL};
+    use objc2_app_kit::{NSPasteboardItem, NSPasteboardTypeFileURL};
     use objc2_foundation::{NSArray, NSString};
     let uris = encode_list(paths)?;
     autoreleasepool(|_| {
@@ -114,7 +119,6 @@ pub(crate) fn write(_app: &tauri::AppHandle, paths: &[String]) -> Result<(), ()>
             items.push(ProtocolObject::from_retained(item));
         }
         let objects = NSArray::from_retained_slice(&items);
-        let board = NSPasteboard::generalPasteboard();
         board.clearContents();
         if board.writeObjects(&objects) {
             Ok(())
@@ -126,10 +130,14 @@ pub(crate) fn write(_app: &tauri::AppHandle, paths: &[String]) -> Result<(), ()>
 
 #[cfg(target_os = "macos")]
 pub(crate) fn read(_app: &tauri::AppHandle) -> Result<Option<Vec<String>>, ()> {
+    read_mac_board(&objc2_app_kit::NSPasteboard::generalPasteboard())
+}
+
+#[cfg(target_os = "macos")]
+fn read_mac_board(board: &objc2_app_kit::NSPasteboard) -> Result<Option<Vec<String>>, ()> {
     use objc2::rc::autoreleasepool;
-    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL};
+    use objc2_app_kit::NSPasteboardTypeFileURL;
     autoreleasepool(|_| {
-        let board = NSPasteboard::generalPasteboard();
         let Some(items) = board.pasteboardItems() else {
             return Ok(None);
         };
@@ -329,6 +337,20 @@ pub(crate) fn write(app: &tauri::AppHandle, paths: &[String]) -> Result<(), ()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires macOS pasteboard service; uses a private named pasteboard"]
+    fn native_mac_file_formats_and_identical_recopy() {
+        let board = objc2_app_kit::NSPasteboard::pasteboardWithUniqueName();
+        let files = vec!["/tmp/中文 空格#%20.txt".into(), "/tmp/other.txt".into()];
+        write_mac_board(&board, &files).unwrap();
+        assert_eq!(read_mac_board(&board).unwrap(), Some(files.clone()));
+        let before = board.changeCount();
+        write_mac_board(&board, &files).unwrap();
+        assert_ne!(board.changeCount(), before);
+        assert_eq!(read_mac_board(&board).unwrap(), Some(files));
+        board.clearContents();
+    }
     #[test]
     fn file_uri_roundtrip_preserves_special_characters() {
         let files = vec!["/tmp/中文 空格#?%20.txt".into(), "/tmp/a\nb\rc.txt".into()];
