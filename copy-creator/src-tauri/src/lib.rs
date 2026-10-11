@@ -1,6 +1,8 @@
 mod clipboard;
 #[cfg(any(not(target_os = "windows"), test))]
 mod clipboard_files;
+#[cfg(any(not(target_os = "windows"), test))]
+mod desktop_focus;
 mod clipboard_wake;
 #[cfg(not(target_os = "windows"))]
 mod desktop_open;
@@ -321,6 +323,8 @@ pub fn run() {
             app.manage(backup::BackupState::default());
             app.manage(updates::UpdateState::default());
             app.manage(lifecycle::LifecycleState::default());
+            #[cfg(not(target_os = "windows"))]
+            desktop_focus::install(app.handle());
             db::enforce_clipboard_limits(app.handle()).ok();
 
             // Repair autostart registry entry to ensure --hidden arg is present
