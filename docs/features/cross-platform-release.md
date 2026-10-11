@@ -24,7 +24,7 @@ Linux ARM64、RPM、Flatpak 和 macOS universal 暂不在初始矩阵内。runne
 
 ## 当前源码差距
 
-基线源码为 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮基础修复及两轮 CI 缺陷修复均已推送，最终源码 `2f1b0c60cd90bfda309c5150a5c81804618a3670` 的[第三轮 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38109127150) 全通过：三个原生平台各 168 通过/3 默认忽略，前端 117/类型/完整 lint 与生产构建通过；Windows 自动回归 189 通过/6 默认忽略。CI 关闭打包，不代表安装或桌面功能通过。各轮失败、修复与边界详见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
+基线源码为 `4e85cf49cebd65eb13e2703330cf631bdd30fe8f`。首轮基础修复及两轮 CI 缺陷修复均已推送，基础功能源码 `2f1b0c60cd90bfda309c5150a5c81804618a3670` 的[第三轮 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38109127150) 全通过：三个原生平台各 168 通过/3 默认忽略，前端 117/类型/完整 lint 与生产构建通过；Windows 自动回归 189 通过/6 默认忽略。此前三轮 CI 均关闭打包。后续首次验证打包发现 Linux AppImage 图标链接及 DEB 运行依赖问题，已固定 CLI 2.11.4（Rust Tauri/runtime 保持原值）、补充依赖；`d6e78381ff1e806bc1f7603a98be3bbe2d113d2d` 的[第二轮打包](https://github.com/baihejiangnan/copy-creator/actions/runs/38111658922)与[包内检查](https://github.com/baihejiangnan/copy-creator/actions/runs/38113172715)全通过，已生成并下载核对四个验证包；不代表安装或桌面功能通过。各轮失败、修复与边界详见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)。
 
 | 范围 | 本轮实现 | 剩余要求 |
 | --- | --- | --- |
@@ -55,7 +55,7 @@ Windows 的六文件发行规则仍只适用于 Windows。联合发行需先扩�
 
 用合成资料与隔离 identifier/系统集成，在两类 Mac 和 Linux 实机/桌面环境分别覆盖：首次启动/托盘/快捷键/轮盘、中文 IME、亮暗/中英/最小窗/缩放、文本/图片/文件采集和外部粘贴、私密复制到期与后续用户复制、自动保存/异常重开/退出与重启、目录搬迁、加密备份跨平台恢复、安装/卸载/升级。系统密钥服务锁定/缺失、macOS 权限拒绝、Wayland 限制须有明确产品行为和可见提示。核对所有 QA 进程与测试后系统状态恢复；不得默认访问真实用户数据。
 
-本轮本机只具备 Windows 工具链；WSL 清单只有 `docker-desktop`，不视作已准备的 Linux 桌面 QA 环境。本轮尝试启动 Docker Desktop 后仍无法连接 Linux 引擎，未创建或运行 Linux 验证容器。远端原生 CI 与首次四个验证包已记录在验证文档；macOS 包内检查通过，Linux 包内检查发现的缺陷正在修复重建，尚无签名公证或桌面验收结果。
+本轮本机只具备 Windows 工具链；WSL 清单只有 `docker-desktop`，不视作已准备的 Linux 桌面 QA 环境。本轮尝试启动 Docker Desktop 后仍无法连接 Linux 引擎，未创建或运行 Linux 验证容器。远端原生 CI、四个验证包及修复后包内检查成功结果已记录在验证文档；尚无签名公证、实际安装或桌面验收结果。
 
 本轮已执行：actionlint 1.7.12 工作流检查通过（下载文件与上游 SHA-256 清单一致；Windows 上未执行 ShellCheck）；Git Bash `bash -n` 对全部 11 个 run 块语法检查通过；YAML 的手动触发/只读权限/三目标矩阵检查、受影响文档相对文件链接检查、`git diff --check` 通过。这些是此前准备轮的静态证据；本轮源码变更与自动回归结果见[首轮验证记录](../verification/2026-10-11-cross-platform-foundation.md)，不将 Windows 回归记为 macOS/Linux 构建通过。
 

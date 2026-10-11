@@ -56,4 +56,21 @@
 
 首次打包 CI 全部成功，三个平台各 168 Rust 通过/3 默认忽略，前端 117、类型及完整 lint 通过；两个 `.app`/DMG、DEB/AppImage 均实际生成。四个包下载至本机后，来源、target、文件集合及 SHA-256 全部匹配。[首次包内检查](https://github.com/baihejiangnan/copy-creator/actions/runs/38111409371) 的两个 macOS 目标通过：DMG 校验/只读挂载、plist/版本/identifier、架构、图标、Applications 链接、内部执行权限与 ad-hoc codesign 验证通过。没有执行公证或 Gatekeeper 验收。
 
-Linux 首次包内检查在 AppImage `.DirIcon` 存在性处失败，DEB 的 ELF 检查另发现直接链接 `libxdo.so.3`、`libssl.so.3`/`libcrypto.so.3`，但元数据只有三个 Tauri 默认依赖。构建器仍为 CLI 2.11.1；[上游 2.11.4 修复说明](https://tauri.app/release/@tauri-apps/cli/v2.11.4/)明确修复 AppImage 图标和桌面入口指向构建机绝对路径的问题。本轮只将 CLI 固定为 2.11.4，锁文件其他依赖版本保持原值，不升级 Rust Tauri/runtime；DEB 额外声明 `libxdo3`、`libssl3` 与链接打开使用的 `xdg-utils`。检查脚本增加链接目标必须位于解出目录内、依赖声明及失败行号检查；修复包需要重新构建/核验，首次 Linux 包不能记为通过。
+Linux 首次包内检查在 AppImage `.DirIcon` 存在性处失败，DEB 的 ELF 检查另发现直接链接 `libxdo.so.3`、`libssl.so.3`/`libcrypto.so.3`，但元数据只有三个 Tauri 默认依赖。构建器仍为 CLI 2.11.1；[上游 2.11.4 修复说明](https://tauri.app/release/@tauri-apps/cli/v2.11.4/)明确修复 AppImage 图标和桌面入口指向构建机绝对路径的问题。本轮只将 CLI 固定为 2.11.4，锁文件其他依赖版本保持原值，不升级 Rust Tauri/runtime；DEB 额外声明 `libxdo3`、`libssl3` 与链接打开使用的 `xdg-utils`。检查脚本增加链接目标必须位于解出目录内、依赖声明及失败行号检查；修复后重新构建/核验，首次 Linux 包不能记为通过。
+
+修复提交为 `d6e78381ff1e806bc1f7603a98be3bbe2d113d2d`，已推送并启动[第二轮打包 CI](https://github.com/baihejiangnan/copy-creator/actions/runs/38111658922)。用加强后的检查器对旧包[反向复验](https://github.com/baihejiangnan/copy-creator/actions/runs/38111660675)，Linux 再次失败；日志确认 `.DirIcon` 指向构建 runner 的 `/home/runner/work/.../Copy Creator.AppDir/Copy Creator.png` 绝对路径，桌面入口本身为相对链接。两个旧 DMG 仍通过。不修改旧 artifact 或忽略失败。
+
+共用 CLI 的 Windows 回归：锁定依赖安装、Tauri 配置读取成功；通过 `node node_modules/@tauri-apps/cli/tauri.js build --ci --bundles msi -- --locked` 实际生成 MSI，退出码 0。先经 `pnpm exec` 调用时 PowerShell shim 丢失 Cargo 分隔符，被 CLI 参数检查拒绝，未开始构建；按既有 Windows 发布脚本使用 Node 直接入口后成功。WindowsInstaller COM 只读核对 ProductVersion=`0.3.0` 和 ExecutablePath=`[INSTALLDIR]copy-creator.exe` 通过。MSI 为 35,065,856 字节，SHA-256 `d0bcc279fbb3608b2216c606ec5464ad4c747c19e198e948d5e8fa5b071bd47c`，已另存本地 `output/cross-platform-prep/windows-cli-2114/` 并标记仅验证；没有执行安装、应用启动、发行签名或覆盖公开附件。本轮没有据此勾选 Windows MSI/UAC/资料保持验收。
+
+第二轮打包 CI 全部成功，来源固定为上述 `d6e7838` 完整 SHA；macOS ARM64/Intel、Linux x64 各 168 Rust 通过、3 默认忽略，无失败，main/doc-tests 各 0 项通过；前端 117、类型、完整 lint 与三个目标生产前端构建通过。[修复后包内检查](https://github.com/baihejiangnan/copy-creator/actions/runs/38113172715)使用同一提交的检查器，三个平台全部成功。Linux DEB 实际声明 `libxdo3, libssl3, xdg-utils, libayatana-appindicator3-1, libwebkit2gtk-4.1-0, libgtk-3-0`；AppImage `.DirIcon -> Copy Creator.png`，桌面入口为 `usr/share/applications/Copy Creator.desktop`，均在移至新 runner 临时目录后解析到包内文件。两个 DMG 的架构分别为 arm64/x86_64，ad-hoc 签名及包内检查再次通过。未放宽检查或跳过失败项。
+
+下列四个包已下载至本机 `output/cross-platform-prep/packages-38111658922/`，完整性脚本核对来源、target、精确文件集合、非空大小与 SHA-256 全通过；本地 `manifest.json` 和 README 保留来源/摘要。artifact 保留期为 14 天。
+
+| 验证包 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| `Copy Creator_0.3.0_aarch64.dmg` | 34,628,294 | `fc675b7f0d31781f56eb6877030c54b6c606238336efda9cb9473c0dba535483` |
+| `Copy Creator_0.3.0_x64.dmg` | 35,032,335 | `de47e0071d1376fd5e3d1eb920ee2ff6e92da4bdd1adbdfb50bf9043ebfab6c2` |
+| `Copy Creator_0.3.0_amd64.deb` | 36,039,452 | `a29e716687e584e16bfaf212ea049c393ed19c61f21ba89a9b63ad2de6e020a8` |
+| `Copy Creator_0.3.0_amd64.AppImage` | 115,677,688 | `f54747aff1adac3227088c69700290544584ed40900110de074895fe5d3f55eb` |
+
+本轮完成验证打包与包内结构检查，没有启动应用、安装 DEB/MSI、验证 AppImage FUSE 实际运行、完成 Apple 公证/Gatekeeper 或桌面验收。私密剪贴板、Linux 原生事件、原生文件格式、单实例/焦点、轮盘手势及性能缺口保持；非 Windows 应用内更新仍为 unsupported。本轮无标签、无公开 Release、无更新元数据变更，收尾文档提交不改变上述产物来源。
