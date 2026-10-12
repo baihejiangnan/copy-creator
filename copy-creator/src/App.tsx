@@ -300,15 +300,11 @@ function App() {
 
   const handleHide = async () => {
     void saveBarrier.hintFlush();
-    const vault = useVaultStore.getState();
-    if (vault.status?.unlocked || vault.busy) await vault.lock();
     await invoke("hide_main_window");
   };
 
   const handleMinimize = async () => {
     void saveBarrier.hintFlush();
-    const vault = useVaultStore.getState();
-    if (vault.status?.unlocked || vault.busy) await vault.lock();
     await getCurrentWindow().minimize();
     await refreshWindowVisibility();
   };

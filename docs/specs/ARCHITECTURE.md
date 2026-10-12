@@ -60,6 +60,8 @@
 
 网站资料模块使用 `VaultPage`、`vaultStore` 和根组件 `VaultSession` 管理界面与锁定事件，Rust `vault.rs` 执行会话权限、加密记录 CRUD 和主密码轮换，`vault_crypto.rs` 提供 Argon2id、AES-256-GCM 与随机密码生成。SQLite 新增 `vault_config` / `vault_entries`，资料内容不进入剪贴板历史表。模块详情见 [网站资料功能说明](../features/website-vault.md)。
 
+主窗口的隐藏和最小化按钮只提示保存并改变窗口状态，不主动锁定密码箱，也不重置资料页空闲计时；自动锁定继续由原生会话按所选策略执行。2026-10-12 已移除按钮路径中绕过策略的显式锁定，自动回归与待补桌面验收见[修复记录](../features/website-vault.md#2026-10-12-自动锁定被窗口按钮绕过的修复)。
+
 网站资料与随记共用 `components/SelectMenu.tsx`（`RecordGroupSelect` 仅包装分组数据），菜单经 portal 避免编辑容器裁剪，视口限制、滚动及键盘/焦点逻辑只维护一份。搜索共用 `SearchInput`，网站资料局部表单 CSS 排除搜索输入。`VaultPage` 按模式重建入场容器，不保留退场页面；锁定由既有 store/session 立即清空并卸载资料，未改原生命令、存储身份或权限边界。实现/浏览器检查见[样式同步验证](../verification/2026-10-10-vault-style.md)。
 
 `backup.rs` 默认导出 v4 并读取 v0/v1/v2/v3，包含活动/归档随记、引用、来源、分组与常用状态；`note_backup.rs` 处理语义冲突与独立恢复来源去重，schema 3 新增 `note_import_origins`。API Key 可移植保护和密码箱主密码合并规则保留；全部导入对象共用事务。长度聚合预检、累计 JSON 预算和精确有界 writer 保持 100/74 MiB 上限；图片准备移出锁，提交前复核，见[加密备份与恢复](../features/encrypted-backup.md)。
