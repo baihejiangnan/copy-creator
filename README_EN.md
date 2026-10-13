@@ -101,18 +101,18 @@ Included in the 0.2.26 portable release. See the [website vault guide](./docs/fe
 
 ## Download
 
-**Update issue in 0.2.28 / 0.2.29:** The old updater may open only the Windows Installer command-line help dialog and requires a one-time manual transition. Download the MSI below, complete installation, and launch the installed program to confirm version 0.3.1. See the [MSI command-line record](./docs/verification/2026-10-11-msi-command-line.md) for the source fix and verification limits.
+**Update issue in 0.2.28 / 0.2.29:** The old updater may open only the Windows Installer command-line help dialog and requires a one-time manual transition. Download the MSI below, complete installation, and launch the installed program to confirm version 0.4.0. See the [MSI command-line record](./docs/verification/2026-10-11-msi-command-line.md) for the source fix and verification limits.
 
-0.3.1 is the official Latest, fixing website vault locking immediately after minimizing or hiding instead of following the selected auto-lock interval. Signed Windows x64 MSI and portable EXE packages are provided; this release has no macOS/Linux packages. Intermittent paste failures, memory targets and desktop/installer acceptance gaps remain. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.3.1-baihejiangnan.1) and [0.3.1 release record](./docs/verification/2026-10-12-release-031.md) for evidence and limits.
+0.4.0 is the official Latest, upgrading the website vault into a vault with identity profiles: personal/work/custom identities, optional multi-identity links and standalone entries, concise presets, custom titles and free-form fields, with field clicks still using the native private paste path. Signed Windows x64 MSI and portable EXE packages are provided; this release has no macOS/Linux packages. Real Windows interaction for the new vault, repeated external field pastes, visuals/scaling, real backup operations and MSI install/upgrade acceptance remain unverified, as do the existing intermittent paste failures and memory gaps. See the [Release notes](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.4.0-baihejiangnan.1) and [0.4.0 release record](./docs/verification/2026-10-14-release-040.md) for evidence and limits.
 
-Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.3.1-baihejiangnan.1). MSI is recommended. Older 0.2.26/0.2.27 portable clients still download an EXE: install this MSI manually once, then use the installed program. Checks for higher versions from this release use the new MSI flow:
+Download the latest build from [this repository's Releases](https://github.com/baihejiangnan/copy-creator/releases/tag/v0.4.0-baihejiangnan.1). MSI is recommended. Older 0.2.26/0.2.27 portable clients still download an EXE: install this MSI manually once, then use the installed program. Checks for higher versions from this release use the new MSI flow:
 
-Create an encrypted backup in the app before upgrading. This release uses schema 6 / backup v4 and promotes legacy phrases to Jot records; downgrading to schema 5 is unsupported.
+Create an encrypted backup in the app before upgrading. This release uses schema 6 / backup v4 and promotes legacy phrases to Jot records; downgrading to schema 5 is unsupported. After the first save of a new-format vault entry, the vault configuration, business and inner-backup versions are raised, so 0.3.1 and earlier refuse to read that vault and a direct downgrade is impossible; restoring the old environment requires the pre-upgrade encrypted backup.
 
 | File | Description |
 |:---|:---|
-| [Copy-Creator_0.3.1_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.3.1-baihejiangnan.1/Copy-Creator_0.3.1_x64.msi) | Windows x64 installer, 34.13 MB; recommended, with a directory choice for first installation |
-| [Copy-Creator-0.3.1-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.3.1-baihejiangnan.1/Copy-Creator-0.3.1-portable.exe) | Windows x64 portable executable, 46.98 MB; manual download, runs without installation |
+| [Copy-Creator_0.4.0_x64.msi](https://github.com/baihejiangnan/copy-creator/releases/download/v0.4.0-baihejiangnan.1/Copy-Creator_0.4.0_x64.msi) | Windows x64 installer, 34.19 MB; recommended, with a directory choice for first installation |
+| [Copy-Creator-0.4.0-portable.exe](https://github.com/baihejiangnan/copy-creator/releases/download/v0.4.0-baihejiangnan.1/Copy-Creator-0.4.0-portable.exe) | Windows x64 portable executable, 47.14 MB; manual download, runs without installation |
 
 **System Requirements**: Windows 11
 
