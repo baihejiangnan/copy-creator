@@ -1,4 +1,7 @@
 use crate::{db::DbState, vault_crypto as crypto};
+#[path = "vault_v2.rs"]
+mod v2;
+pub use v2::VaultPage;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -111,6 +114,9 @@ pub struct VaultField {
     pub label: String,
     pub value: String,
     pub sensitive: bool,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub purpose: String,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -126,6 +132,13 @@ pub struct VerificationMethod {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VaultEntry {
+    pub payload_version: Option<u32>,
+    pub kind: String,
+    pub template: String,
+    pub identity_ids: Vec<String>,
+    pub summary_field_id: String,
+    pub login_method: String,
+    pub login_note: String,
     pub id: String,
     pub title: String,
     pub website: String,
@@ -143,6 +156,11 @@ pub struct VaultEntry {
 
 #[derive(Serialize)]
 pub struct VaultSummary {
+    kind: String,
+    template: String,
+    identity_ids: Vec<String>,
+    summary: String,
+    related_count: usize,
     id: String,
     title: String,
     website: String,
@@ -155,20 +173,15 @@ pub struct VaultSummary {
 }
 
 impl VaultEntry {
-    fn summary(&self) -> VaultSummary {
-        VaultSummary {
-            id: self.id.clone(),
-            title: self.title.clone(),
-            website: self.website.clone(),
-            username: self.username.clone(),
-            email: self.email.clone(),
-            tags: self.tags.clone(),
-            has_password: !self.password.is_empty(),
-            verification_count: self.verification.len(),
-            updated_at: self.updated_at.clone(),
-        }
-    }
+    fn summary(&self) -> VaultSummary { self.v2_summary() }
     fn matches(&self, query: &str) -> bool {
+        if self.payload_version == Some(2) {
+            let searchable = format!("{} {} {}", self.title, self.tags.join(" "), self.fields.iter().map(|field| {
+                let alias = match field.purpose.as_str() { "legacy_base:website" => "网址", "legacy_base:username" => "账号", "legacy_base:email" => "邮箱", "legacy_base:phone" => "手机号", "legacy_base:password" => "密码", _ => "" };
+                if field.sensitive { format!("{} {}", field.label, alias) } else { format!("{} {} {}", field.label, alias, field.value) }
+            }).collect::<Vec<_>>().join(" ")).to_lowercase();
+            return query.to_lowercase().split_whitespace().all(|term| searchable.contains(term));
+        }
         let searchable = format!(
             "{} {} {} {} {} {} {} {}",
             self.title,
@@ -192,6 +205,8 @@ impl VaultEntry {
             .all(|term| searchable.contains(term))
     }
     fn validate(&mut self) -> Result<(), String> {
+        self.supported()?;
+        if self.payload_version == Some(2) { return self.validate_v2(); }
         self.title = self.title.trim().to_string();
         self.website = self.website.trim().to_string();
         self.username = self.username.trim().to_string();
@@ -274,21 +289,25 @@ impl VaultEntry {
             .collect();
         Ok(())
     }
-    fn field_value(&self, field: &str) -> Result<&str, String> {
+    fn field_value(&self, field: &str) -> Result<String, String> {
+        if let Some(id) = field.strip_prefix("field:") {
+            return self.unified().fields.into_iter().find(|value| value.id == id).map(|value| value.value).ok_or_else(|| "vault.notFound".into());
+        }
+        if self.payload_version == Some(2) { return Err("vault.notFound".into()); }
         match field {
-            "username" => Ok(&self.username),
-            "email" => Ok(&self.email),
-            "phone" => Ok(&self.phone),
-            "password" => Ok(&self.password),
-            "website" => Ok(&self.website),
-            "notes" => Ok(&self.notes),
+            "username" => Ok(self.username.clone()),
+            "email" => Ok(self.email.clone()),
+            "phone" => Ok(self.phone.clone()),
+            "password" => Ok(self.password.clone()),
+            "website" => Ok(self.website.clone()),
+            "notes" => Ok(self.notes.clone()),
             _ => {
                 if let Some(id) = field.strip_prefix("field:") {
                     return self
                         .fields
                         .iter()
                         .find(|value| value.id == id)
-                        .map(|value| value.value.as_str())
+                        .map(|value| value.value.clone())
                         .ok_or_else(|| "vault.notFound".into());
                 }
                 if let Some(id) = field.strip_prefix("verification:") {
@@ -296,7 +315,7 @@ impl VaultEntry {
                         .verification
                         .iter()
                         .find(|value| value.id == id)
-                        .map(|value| value.value.as_str())
+                        .map(|value| value.value.clone())
                         .ok_or_else(|| "vault.notFound".into());
                 }
                 Err("vault.notFound".into())
@@ -323,7 +342,7 @@ fn config(conn: &Connection) -> Result<Option<(String, String)>, String> {
         .optional()
         .map_err(|_| "vault.databaseFailed")?;
     match value {
-        Some((1, salt, verifier)) => Ok(Some((salt, verifier))),
+        Some((1 | 2, salt, verifier)) => Ok(Some((salt, verifier))),
         Some(_) => Err("vault.invalidData".into()),
         None => {
             let count: i64 = conn
@@ -359,9 +378,10 @@ pub(crate) fn copy_encrypted_into(source: &Connection, destination: &Connection)
         return Ok(());
     };
     ensure_empty_storage(destination)?;
+    let version: u32 = source.query_row("SELECT version FROM vault_config WHERE id = 1", [], |row| row.get(0)).map_err(|_| "vault.databaseFailed")?;
     destination.execute(
-        "INSERT INTO vault_config (id, version, salt, verifier) VALUES (1, 1, ?1, ?2)",
-        params![salt, verifier],
+        "INSERT INTO vault_config (id, version, salt, verifier) VALUES (1, ?3, ?1, ?2)",
+        params![salt, verifier, version],
     )
     .map_err(|_| "vault.databaseFailed")?;
     let mut stmt = source
@@ -419,8 +439,9 @@ pub(crate) fn snapshot_backup(conn: &Connection) -> Result<Option<VaultBackup>, 
         .map_err(|_| "vault.databaseFailed")?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|_| "vault.databaseFailed")?;
+    let version = conn.query_row("SELECT version FROM vault_config WHERE id = 1", [], |row| row.get(0)).map_err(|_| "vault.databaseFailed")?;
     let backup = VaultBackup {
-        version: 1,
+        version,
         salt,
         verifier,
         entries,
@@ -437,7 +458,7 @@ pub(crate) fn validate_backup(backup: &VaultBackup) -> Result<(), String> {
                 .and_then(|encoded| STANDARD.decode(encoded).ok())
                 .is_some_and(|bytes| bytes.len() >= 28)
     }
-    if backup.version != 1
+    if !matches!(backup.version, 1 | 2)
         || !STANDARD
             .decode(&backup.salt)
             .ok()
@@ -479,6 +500,8 @@ pub(crate) fn backup_mode(
 }
 
 pub(crate) struct VaultImportPlan {
+    version: u32,
+    comparison_key: Option<Zeroizing<[u8; 32]>>,
     expected: Option<(String, String)>,
     create: Option<(String, String)>,
     entries: Vec<EncryptedBackupEntry>,
@@ -503,11 +526,14 @@ impl Drop for BackupPlainEntry {
         ] {
             text.zeroize();
         }
+        entry.kind.zeroize(); entry.template.zeroize(); entry.identity_ids.zeroize();
+        entry.summary_field_id.zeroize(); entry.login_method.zeroize(); entry.login_note.zeroize();
         entry.tags.zeroize();
         for field in &mut entry.fields {
             field.id.zeroize();
             field.label.zeroize();
             field.value.zeroize();
+            field.field_type.zeroize(); field.purpose.zeroize();
         }
         for method in &mut entry.verification {
             method.id.zeroize();
@@ -542,6 +568,8 @@ pub(crate) fn prepare_backup_import(
     source_password: &str,
 ) -> Result<VaultImportPlan, String> {
     let mut plan = VaultImportPlan {
+        version: incoming.map_or(1, |backup| backup.version),
+        comparison_key: None,
         expected: current.clone(),
         create: None,
         entries: Vec::new(),
@@ -585,6 +613,7 @@ pub(crate) fn prepare_backup_import(
                 return Err("backup.invalidFile".into());
             }
             entry.0.validate().map_err(|_| "backup.invalidFile")?;
+            if incoming.version == 1 && entry.0.payload_version.is_some() { return Err("backup.invalidFile".into()); }
             let normalized =
                 Zeroizing::new(serde_json::to_vec(&entry.0).map_err(|_| "backup.invalidFile")?);
             plan.entries.push(EncryptedBackupEntry {
@@ -592,6 +621,7 @@ pub(crate) fn prepare_backup_import(
                 ..record.clone()
             });
         }
+        plan.comparison_key = Some(current_key);
     }
     Ok(plan)
 }
@@ -605,10 +635,28 @@ pub(crate) fn apply_backup_import(
     }
     if let Some((salt, verifier)) = &plan.create {
         conn.execute(
-            "INSERT INTO vault_config (id, version, salt, verifier) VALUES (1, 1, ?1, ?2)",
-            params![salt, verifier],
+            "INSERT INTO vault_config (id, version, salt, verifier) VALUES (1, ?3, ?1, ?2)",
+            params![salt, verifier, plan.version],
         )
         .map_err(|_| "vault.databaseFailed")?;
+    }
+    if plan.version == 2 {
+        conn.execute("UPDATE vault_config SET version = 2 WHERE id = 1", []).map_err(|_| "vault.databaseFailed")?;
+        // Reject ambiguous IDs rather than attach new encrypted relationships to a different record.
+        for record in &plan.entries {
+            let existing: Option<String> = conn.query_row("SELECT encrypted_data FROM vault_entries WHERE id = ?1", [&record.id], |row| row.get(0)).optional().map_err(|_| "vault.databaseFailed")?;
+            if let Some(existing) = existing.filter(|value| value != &record.encrypted_data) {
+                let Some(key) = &plan.comparison_key else { return Err("backup.vaultIdConflict".into()); };
+                let left = crypto::decrypt(key, &record.id, &existing)?;
+                let right = crypto::decrypt(key, &record.id, &record.encrypted_data)?;
+                let mut left = BackupPlainEntry(serde_json::from_slice(&left).map_err(|_| "backup.invalidFile")?);
+                let mut right = BackupPlainEntry(serde_json::from_slice(&right).map_err(|_| "backup.invalidFile")?);
+                left.0.validate()?; right.0.validate()?;
+                let left = Zeroizing::new(serde_json::to_vec(&left.0).map_err(|_| "backup.invalidFile")?);
+                let right = Zeroizing::new(serde_json::to_vec(&right.0).map_err(|_| "backup.invalidFile")?);
+                if *left != *right { return Err("backup.vaultIdConflict".into()); }
+            }
+        }
     }
     let mut imported = 0;
     for record in &plan.entries {
@@ -696,6 +744,9 @@ fn rekey_entries(
     };
     for (id, encrypted) in records {
         let plaintext = crypto::decrypt(old_key, &id, &encrypted)?;
+        let mut checked = BackupPlainEntry(serde_json::from_slice(&plaintext).map_err(|_| "vault.invalidData")?);
+        checked.0.validate()?;
+        if checked.0.id != id { return Err("vault.invalidData".into()); }
         tx.execute(
             "UPDATE vault_entries SET encrypted_data = ?1 WHERE id = ?2",
             params![crypto::encrypt(key, &id, &plaintext)?, id],
@@ -725,14 +776,21 @@ fn read_entry(conn: &Connection, key: &[u8; 32], id: &str) -> Result<VaultEntry,
         .map_err(|_| "vault.databaseFailed")?
         .ok_or("vault.notFound")?;
     let plaintext = crypto::decrypt(key, id, &encrypted)?;
-    let entry: VaultEntry = serde_json::from_slice(&plaintext).map_err(|_| "vault.invalidData")?;
+    let mut entry: VaultEntry = serde_json::from_slice(&plaintext).map_err(|_| "vault.invalidData")?;
+    entry.validate()?;
     if entry.id != id {
         return Err("vault.invalidData".into());
     }
     Ok(entry)
 }
 
-fn save_entry(conn: &Connection, key: &[u8; 32], mut entry: VaultEntry) -> Result<String, String> {
+fn save_entry(conn: &Connection, key: &[u8; 32], entry: VaultEntry) -> Result<String, String> {
+    let tx = conn.unchecked_transaction().map_err(|_| "vault.databaseFailed")?;
+    let id = write_entry(&tx, key, entry)?;
+    tx.commit().map_err(|_| "vault.databaseFailed")?;
+    Ok(id)
+}
+fn write_entry(conn: &Connection, key: &[u8; 32], mut entry: VaultEntry) -> Result<String, String> {
     entry.validate()?;
     let now = chrono::Utc::now().to_rfc3339();
     if entry.id.is_empty() {
@@ -740,7 +798,29 @@ fn save_entry(conn: &Connection, key: &[u8; 32], mut entry: VaultEntry) -> Resul
         entry.created_at = now.clone();
     } else {
         uuid::Uuid::parse_str(&entry.id).map_err(|_| "vault.invalidData")?;
-        entry.created_at = read_entry(conn, key, &entry.id)?.created_at;
+        match read_entry(conn, key, &entry.id) {
+            Ok(previous) => {
+                if entry.payload_version == Some(2) {
+                    if entry.kind != previous.unified().kind { return Err("vault.conflict".into()); }
+                    let mut candidate = BackupPlainEntry(entry.clone());
+                    candidate.0.created_at = previous.created_at.clone(); candidate.0.updated_at = previous.updated_at.clone();
+                    let candidate = Zeroizing::new(serde_json::to_vec(&candidate.0).map_err(|_| "vault.invalidData")?);
+                    let saved = Zeroizing::new(serde_json::to_vec(&previous).map_err(|_| "vault.invalidData")?);
+                    // A lost acknowledgement may replay the same draft; never create a second record.
+                    if *candidate == *saved { return Ok(entry.id); }
+                    if entry.updated_at != previous.updated_at { return Err("vault.conflict".into()); }
+                }
+                entry.created_at = previous.created_at;
+            }
+            Err(error) if error == "vault.notFound" && entry.payload_version == Some(2) && entry.created_at.is_empty() && entry.updated_at.is_empty() => entry.created_at = now.clone(),
+            Err(error) => return Err(error),
+        }
+    }
+    if entry.payload_version == Some(2) {
+        for id in &entry.identity_ids {
+            if read_entry(conn, key, id)?.kind != "identity" { return Err("vault.invalidIdentity".into()); }
+        }
+        if conn.execute("UPDATE vault_config SET version = 2 WHERE id = 1", []).map_err(|_| "vault.databaseFailed")? != 1 { return Err("vault.notConfigured".into()); }
     }
     entry.updated_at = now;
     let plaintext = Zeroizing::new(serde_json::to_vec(&entry).map_err(|_| "vault.invalidData")?);
@@ -962,31 +1042,30 @@ pub fn touch_vault(app: AppHandle, expected_storage_epoch: Option<u64>) -> Resul
 }
 
 #[tauri::command]
-pub fn list_vault_entries(app: AppHandle, search: String, expected_storage_epoch: Option<u64>) -> Result<Vec<VaultSummary>, String> {
+pub fn query_vault_entries(app: AppHandle, search: String, kind: String, identity: String, offset: usize, expected_storage_epoch: Option<u64>) -> Result<VaultPage, String> {
     let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
     let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
     crate::db::require_storage_epoch(&app, expected_storage_epoch)?;
-    if search.len() > 1024 {
-        return Err("vault.tooMuchData".into());
-    }
     with_key(&app, |key| {
-        let state = app.state::<DbState>();
-        let conn = state.conn.lock().map_err(|_| "vault.databaseFailed")?;
-        let mut stmt = conn
-            .prepare("SELECT id FROM vault_entries ORDER BY updated_at DESC")
-            .map_err(|_| "vault.databaseFailed")?;
-        let ids = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|_| "vault.databaseFailed")?;
-        let mut entries = Vec::new();
-        for id in ids {
-            let entry = read_entry(&conn, key, &id.map_err(|_| "vault.databaseFailed")?)?;
-            if entry.matches(&search) {
-                entries.push(entry.summary());
-            }
-        }
-        Ok(entries)
+        let db = app.state::<DbState>();
+        let conn = db.conn.lock().map_err(|_| "vault.databaseFailed")?;
+        v2::query_entries(&conn, key, &search, &kind, &identity, offset)
     })
+}
+#[tauri::command]
+pub fn get_vault_summaries(app: AppHandle, ids: Vec<String>, expected_storage_epoch: Option<u64>) -> Result<Vec<VaultSummary>, String> {
+    let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
+    let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
+    crate::db::require_storage_epoch(&app, expected_storage_epoch)?;
+    if ids.len() > 128 { return Err("vault.tooMuchData".into()); }
+    with_key(&app, |key| {
+        let db = app.state::<DbState>(); let conn = db.conn.lock().map_err(|_| "vault.databaseFailed")?;
+        ids.iter().map(|id| read_entry(&conn, key, id).map(|entry| entry.summary())).collect()
+    })
+}
+#[tauri::command]
+pub fn list_vault_entries(app: AppHandle, search: String, expected_storage_epoch: Option<u64>) -> Result<Vec<VaultSummary>, String> {
+    Ok(query_vault_entries(app, search, String::new(), String::new(), 0, expected_storage_epoch)?.entries)
 }
 
 #[tauri::command]
@@ -997,7 +1076,7 @@ pub fn get_vault_entry(app: AppHandle, id: String, expected_storage_epoch: Optio
     with_key(&app, |key| {
         let state = app.state::<DbState>();
         let conn = state.conn.lock().map_err(|_| "vault.databaseFailed")?;
-        read_entry(&conn, key, &id)
+        Ok(read_entry(&conn, key, &id)?.unified())
     })
 }
 
@@ -1024,18 +1103,10 @@ pub fn delete_vault_entry(app: AppHandle, id: String, expected_storage_epoch: Op
     let lifecycle = app.state::<crate::lifecycle::LifecycleState>();
     let _producer = lifecycle.try_producer().ok_or("lifecycle.busy")?;
     crate::db::require_storage_epoch(&app, expected_storage_epoch)?;
-    with_key(&app, |_| {
-        let count = app
-            .state::<DbState>()
-            .conn
-            .lock()
-            .map_err(|_| "vault.databaseFailed")?
-            .execute("DELETE FROM vault_entries WHERE id = ?1", [id])
-            .map_err(|_| "vault.databaseFailed")?;
-        if count == 0 {
-            return Err("vault.notFound".into());
-        }
-        Ok(())
+    with_key(&app, |key| {
+        let db = app.state::<DbState>();
+        let conn = db.conn.lock().map_err(|_| "vault.databaseFailed")?;
+        v2::delete_entry(&conn, key, &id)
     })
 }
 

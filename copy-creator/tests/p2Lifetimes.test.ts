@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { LatestQuery } from "../src/lib/latestQuery.ts";
 import { ownEventSubscriptions } from "../src/lib/eventSubscriptions.ts";
 
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -100,6 +101,7 @@ function vaultFixture() {
     if (name === "zustand") return { create };
     if (name === "@tauri-apps/api/core") return {};
     if (name.endsWith("/storageIdentity")) return { invokeStorage: async () => {}, getStorageIdentity: async () => 1, onStorageIdentity: () => () => {}, isCurrentStorageIdentity: () => true };
+    if (name.endsWith("/latestQuery")) return { LatestQuery };
     if (name.endsWith("/types/vault")) return { VAULT_AUTO_LOCK_OPTIONS: ["3hours"] };
     throw Error(name);
   }, { setTimeout: (fn: () => void, delay: number) => { timers.set(++next, { at: now + delay, fn }); return next; }, clearTimeout: (id: number) => timers.delete(id) }).useVaultStore;

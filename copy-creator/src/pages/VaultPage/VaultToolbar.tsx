@@ -3,6 +3,7 @@ import SelectMenu from "../../components/SelectMenu";
 import { Icons } from "../../components/Icons";
 import { useVaultStore } from "../../stores/vaultStore";
 import { normalizeVaultAutoLock, VAULT_AUTO_LOCK_OPTIONS } from "../../types/vault";
+import { requestVaultNavigation } from "../../lib/vaultNavigation";
 
 interface VaultToolbarProps {
   onChangeMaster?: () => void;
@@ -26,7 +27,7 @@ export default function VaultToolbar({ onChangeMaster, masterDisabled }: VaultTo
     </div>
     {status?.unlocked && <div className="vault-actions">
       <button type="button" className="vault-text-button" onClick={onChangeMaster} disabled={masterDisabled}>{t("vault.changeMaster")}</button>
-      <button type="button" className="vault-button secondary small" onClick={() => void lock()}>{Icons.vault}{t("vault.lock")}</button>
+      <button type="button" className="vault-button secondary small" disabled={busy} onClick={() => requestVaultNavigation(() => void lock())}>{Icons.vault}{t("vault.lock")}</button>
     </div>}
   </div>;
 }

@@ -918,6 +918,28 @@ pub async fn import_user_data(
 mod tests {
     use super::*;
 
+    #[test]
+    fn v2_identity_bundle_roundtrip_and_reverse_fixture() {
+        let source=connection(); let identity_id=uuid::Uuid::new_v4().to_string();
+        let key=seed_vault(&source,MASTER,[7;16],&identity_id,"Identity");
+        let mut identity=restore_entry(&source,&key,&identity_id);
+        identity.payload_version=Some(2); identity.kind="identity".into(); identity.template="identityPersonal".into();
+        identity.website.clear();identity.username.clear();identity.email.clear();identity.phone.clear();identity.password.clear();identity.notes.clear();identity.verification.clear();
+        identity.fields=vec![vault::VaultField{id:"email".into(),label:"Email".into(),value:"identity@example.com".into(),field_type:"text".into(),..Default::default()}];
+        let mut service=identity.clone();service.id=uuid::Uuid::new_v4().to_string();service.kind="entry".into();service.template="server".into();service.title="Remote server".into();service.identity_ids=vec![identity_id.clone()];
+        service.fields=vec![vault::VaultField{id:"ip".into(),label:"IP".into(),value:"203.0.113.24".into(),field_type:"text".into(),..Default::default()},vault::VaultField{id:"password".into(),label:"Password".into(),value:"DEMO_ONLY_SERVER_SECRET".into(),field_type:"secret".into(),sensitive:true,..Default::default()}];
+        for entry in [&identity,&service] { source.execute("INSERT OR REPLACE INTO vault_entries VALUES(?1,?2,?3,?4)",params![entry.id,crypto::encrypt(&key,&entry.id,&Zeroizing::new(serde_json::to_vec(entry).unwrap())).unwrap(),entry.created_at,entry.updated_at]).unwrap(); }
+        source.execute("UPDATE vault_config SET version=2",[]).unwrap();
+        source.execute("INSERT INTO settings VALUES('qa_vault_legacy_probe','incoming')",[]).unwrap();
+        let snapshot=export_snapshot(&source).unwrap();assert_eq!(snapshot.vault.as_ref().unwrap().version,2);
+        let bytes=encode_bundle(&snapshot,BACKUP_PASSWORD).unwrap();assert!(!String::from_utf8_lossy(&bytes).contains("DEMO_ONLY"));
+        if let Ok(path)=std::env::var("VAULT_QA_REVERSE_FIXTURE") { std::fs::write(path,&bytes).unwrap(); }
+        let (bundle,_)=decode_bundle(&bytes,BACKUP_PASSWORD).unwrap();let mut target=connection();let plan=plan(&target,bundle.vault.as_ref(),"","").unwrap();
+        assert_eq!(apply_bundle(&mut target,&bundle,&bundle.settings,&plan).unwrap(),(2,0));
+        assert_eq!(restore_entry(&target,&key,&service.id).identity_ids,vec![identity_id]);
+        assert_eq!(vault::snapshot_backup(&target).unwrap().unwrap().version,2);
+    }
+
     const MASTER: &str = "Original-vault-master-2026!";
     const BACKUP_PASSWORD: &str = "Independent-backup-password!";
     const KEY: &str = "sk-backup-private-test-key-123456789";
@@ -1107,6 +1129,7 @@ mod tests {
                 label: "Name".into(),
                 value: "Private name".into(),
                 sensitive: true,
+                ..Default::default()
             }],
             verification: vec![vault::VerificationMethod {
                 id: "recovery".into(),

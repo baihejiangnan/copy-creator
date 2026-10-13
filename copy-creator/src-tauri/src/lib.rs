@@ -425,6 +425,8 @@ pub fn run() {
             vault::lock_vault,
             vault::touch_vault,
             vault::list_vault_entries,
+            vault::query_vault_entries,
+            vault::get_vault_summaries,
             vault::get_vault_entry,
             vault::save_vault_entry,
             vault::delete_vault_entry,

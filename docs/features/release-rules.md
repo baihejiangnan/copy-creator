@@ -25,6 +25,7 @@
 3. 新发行同步 `copy-creator/package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 中应用自身的版本，后三处均在内层应用。**基础版本必须高于已分发版本**，仅递增个人版后缀或 build 元数据不能触发升级。默认标签 `v<基础版本>-baihejiangnan.<无前导零正32位整数>`，标题 `Copy Creator <基础版本> 个人增强版`；核对版本/标签未占用。
 4. 不移动既有发行标签，不替换已公开二进制。源码或重建改变二进制时发布更高基础版本；纯说明勘误可改原正文。
 5. 逐项审查并暂存授权内容，沿用 feat/fix/perf/docs/chore 等前缀。保留公钥、合成签名夹具、WiX fragment、验证器源码/锁文件与发行脚本；排除 node_modules/dist/target/releases、优化快照、临时日志、用户资料和私钥。检查 `git diff --cached --check` 后提交，记录完整构建 SHA。
+   共享工作区含其他任务时，先列出本次包含/排除的文件与混合文件片段，再选择性暂存；不要用 `git add .`。`output/` 并非整体被忽略，其中可能含预览数据库、WebView 缓存和备份。独立检出必须来自已审查提交，缺少未跟踪依赖时先补齐授权源码，不从共享工作区整目录复制。
 6. 纯源码推送执行与改动对应的检查；纯文档只检查事实、链接和 diff。正式签名构建的自动检查统一由 §3 脚本执行，不先重复跑整套测试。
 
 ## 3. 构建签名
@@ -153,6 +154,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Downloaded release verification failed' }
 
 按实际授权复制对应模板，模板不扩大任务范围。
 
+**仅推送源码：**
+
+> 按 AGENTS.md、TODO 和发布规则核对本次授权范围，选择性提交并正常快进推送 origin/main，执行改动对应检查，核验远端 SHA。保留其他任务的修改，不改版本、不打包、不推标签、不创建或公开 Release。分别报告实际检查、提交和推送结果。
+
 **推送源码并本地打包：**
 
 > 按 AGENTS.md、TODO 和发布规则整理授权修改，固定提交，完成本地签名打包和 origin/main 推送，交付真实产物/验证状态及剩余问题。按规则只恢复失败步骤。本次不推发布标签、不创建或公开 Release。
@@ -160,3 +165,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Downloaded release verification failed' }
 **已授权推送并公开新版 Release：**
 
 > 按 AGENTS.md、TODO 和发布规则顺序完成本次新版本的提交、签名构建、推送、标签、草稿核对、正式 Latest 发布与匿名六文件核验，并执行本次要求的客户端验收。同步文档，分别报告各阶段结果和已接受的验收缺口。异常按规则入口处理，只恢复失败步骤。
+
+完整交接示例见[发布任务提示词](../prompts/release-handoff.md)，独立 Agent 的只读审查及本轮实际执行结果见[0.4.0 发行记录](../verification/2026-10-14-release-040.md)。提示词中的验收取舍必须由当次用户明确填写，不能照抄历史授权。

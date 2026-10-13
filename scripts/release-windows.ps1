@@ -106,6 +106,8 @@ try {
         # Do not turn uncommitted code into a tagged production artifact.
         $sourceStatus = @(& git status --porcelain); Assert-Exit 'Read final source'
         if (-not $AllowDirty -and $sourceStatus.Count) { throw 'Build changed tracked source; commit and rebuild' }
+        $finalSourceCommit = (& git rev-parse HEAD).Trim(); Assert-Exit 'Read final source commit'
+        if ($finalSourceCommit -ne $sourceCommit) { throw 'HEAD changed during build; fix the source checkout and rebuild' }
         @{sourceCommit=$sourceCommit;validationOnly=[bool]$AllowDirty;version=$version;tag=$Tag;directory=$stage;assets=6;published=$false;installed=$false} | ConvertTo-Json
     } finally { Pop-Location }
 } finally { Pop-Location }

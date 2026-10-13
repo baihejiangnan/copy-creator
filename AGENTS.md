@@ -42,7 +42,7 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | [copy-creator/src-tauri/src/lifecycle.rs](copy-creator/src-tauri/src/lifecycle.rs)、[storage.rs](copy-creator/src-tauri/src/storage.rs) | 生命周期交接、存储目录切换 |
 | [copy-creator/src-tauri/src/updates.rs](copy-creator/src-tauri/src/updates.rs)、[update_package.rs](copy-creator/src-tauri/src/update_package.rs)、[update_signature.rs](copy-creator/src-tauri/src/update_signature.rs) | 公开更新元数据、运行模式、签名下载和保存后升级；独立发行验证器复用原生验签代码 |
 | [copy-creator/src-tauri/src/backup.rs](copy-creator/src-tauri/src/backup.rs)、[note_backup.rs](copy-creator/src-tauri/src/note_backup.rs) | 加密备份、导入与便签恢复 |
-| [copy-creator/src-tauri/src/vault.rs](copy-creator/src-tauri/src/vault.rs)、[vault_crypto.rs](copy-creator/src-tauri/src/vault_crypto.rs) | 密码箱权限、会话与加密 |
+| [copy-creator/src-tauri/src/vault.rs](copy-creator/src-tauri/src/vault.rs)、[vault_crypto.rs](copy-creator/src-tauri/src/vault_crypto.rs)、[vault_v2.rs](copy-creator/src-tauri/src/vault_v2.rs) | 保险箱权限、会话、加密载荷与身份关系 |
 | [copy-creator/src-tauri/src/secrets.rs](copy-creator/src-tauri/src/secrets.rs)、[secrets_portable.rs](copy-creator/src-tauri/src/secrets_portable.rs)、[desktop_open.rs](copy-creator/src-tauri/src/desktop_open.rs)、[desktop_focus.rs](copy-creator/src-tauri/src/desktop_focus.rs) | Windows DPAPI、macOS/Linux 系统密钥库与认证密文；非 Windows 浏览器/文件定位与双窗焦点保护 |
 | [copy-creator/tests/](copy-creator/tests/) | 前端逻辑单元测试；Rust 测试位于原生源码中 |
 | [copy-creator/public/](copy-creator/public/)、[assets-source/](copy-creator/assets-source/) | 随应用发布的资源、保留但不发布的原始素材 |
@@ -58,11 +58,11 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | 便签界面、捕获、自动保存、草稿恢复、搜索和验收 | [便签设计](docs/features/notes-design.md) |
 | 资源体积、双窗口图片、查询/数据库热点、分包和性能测量 | [性能与体积优化方案](docs/features/performance-design.md) |
 | 备份格式、容量边界、兼容、导入事务和恢复规则 | [加密备份与恢复](docs/features/encrypted-backup.md) |
-| 密码箱、主密码、权限、复制/填入与资料保护 | [网站资料功能说明](docs/features/website-vault.md) |
+| 保险箱升级方案、现有网站资料、主密码、权限、字段粘贴与资料保护 | [保险箱功能与界面设计](docs/features/vault-design.md)；[旧网站资料与历史合同](docs/features/website-vault.md)；[交互原型](docs/prototypes/vault/index.html) |
 | 更新检查、启动行为、MSI 升级及两个入口/安装后启动验收 | [更新说明](docs/features/updates.md)；[MSI 参数帮助页修复验证](docs/verification/2026-10-11-msi-command-line.md) |
-| 推送规则：提交、远端更新、版本号、便携构建和 GitHub Release 发布 | [推送规则（含构建与 Release 发布）](docs/features/release-rules.md)；[0.3.0 发行验证](docs/verification/2026-10-11-release-030.md)；[0.3.1 Windows 发行验证](docs/verification/2026-10-12-release-031.md) |
+| 推送规则：提交、远端更新、版本号、便携构建和 GitHub Release 发布 | [推送规则（含构建与 Release 发布）](docs/features/release-rules.md)；[0.3.0 发行验证](docs/verification/2026-10-11-release-030.md)；[0.3.1 Windows 发行验证](docs/verification/2026-10-12-release-031.md)；[发布交接提示词](docs/prompts/release-handoff.md) |
 | macOS / Linux 构建矩阵、移植缺口、签名公证和发布前验收 | [跨平台发行准备](docs/features/cross-platform-release.md)；[手动构建工作流](.github/workflows/platform-readiness.yml)；[验证包检查工作流](.github/workflows/inspect-platform-packages.yml) |
-| 已执行检查的环境、结果和剩余验证边界 | [验证记录](docs/verification/)；优先读取 TODO 相关条目链接的记录；本轮入口为[轮盘随记与 Key 验证](docs/verification/2026-10-10-radial-notes-and-key.md) |
+| 已执行检查的环境、结果和剩余验证边界 | [验证记录](docs/verification/)；优先读取 TODO 相关条目链接的记录；当前入口以 TODO 对应条目为准，历史示例为[轮盘随记与 Key 验证](docs/verification/2026-10-10-radial-notes-and-key.md) |
 | 监听清理、提示计时器与编辑器分组复用的自动/反向验证及桌面环境边界 | [P2 生命周期验证](docs/verification/2026-10-10-p2-lifetimes.md) |
 | 代码评审发现的缺陷、风险、死代码与建议修复顺序 | [代码修复清单](docs/reviews/2026-10-10-code-fix-list.md)；修复前先按清单核对行号是否仍有效 |
 | 阶段变化、历史问题背景和 Windows 发行故障恢复 | [开发日志](docs/project_process.md)、[问题与解决方案](docs/problems_and_solutions.md) |

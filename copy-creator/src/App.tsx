@@ -8,6 +8,7 @@ import { ownEventSubscriptions } from "./lib/eventSubscriptions";
 import ClipboardPage from "./pages/ClipboardPage";
 import VaultSession from "./components/VaultSession";
 import { useVaultStore } from "./stores/vaultStore";
+import { hasUnsavedVaultDraft, requestVaultNavigation } from "./lib/vaultNavigation";
 import ClipboardLimitDialog from "./components/ClipboardLimitDialog";
 import SettingsSaveStatus from "./components/SettingsSaveStatus";
 import { useSettingsEditorStore } from "./stores/settingsEditorStore";
@@ -100,6 +101,7 @@ function App() {
     const openNote = (event: Event) => {
       const id = (event as CustomEvent<{ id: string }>).detail?.id;
       if (typeof id !== "string") return;
+      if (hasUnsavedVaultDraft()) { useVaultStore.getState().setError("vault.unsavedDraft"); return; }
       React.startTransition(() => setActivePanel("phrases"));
       void import("./stores/notesWorkspace").then(async ({ useNotesWorkspace }) => {
         await useNotesWorkspace.getState().initialize();
@@ -129,6 +131,7 @@ function App() {
         const { useNotesWorkspace } = await import("./stores/notesWorkspace");
         await useNotesWorkspace.getState().initialize();
         if (disposed || saveBarrier.getSnapshot().busy) return;
+        if (hasUnsavedVaultDraft()) { useVaultStore.getState().setError("vault.unsavedDraft"); return; }
         React.startTransition(() => setActivePanel("phrases"));
         const workspace = useNotesWorkspace.getState();
         workspace.create();
@@ -168,8 +171,7 @@ function App() {
 
   useEffect(() => {
     const unlisten = listen("show-clipboard", () => {
-      setActivePanel("clipboard");
-      void markClipboardRead();
+      requestVaultNavigation(() => { setActivePanel("clipboard"); void markClipboardRead(); });
     });
 
     return () => {
@@ -296,7 +298,7 @@ function App() {
     };
   }, []);
 
-  const handleSettingsClick = () => React.startTransition(() => setActivePanel("settings"));
+  const handleSettingsClick = () => requestVaultNavigation(() => React.startTransition(() => setActivePanel("settings")));
 
   const handleHide = async () => {
     void saveBarrier.hintFlush();
@@ -350,8 +352,10 @@ function App() {
                 key={item.panelType}
                 className={`sidebar-nav-item ${isActive ? "active" : ""}`}
                 onClick={() => {
-                  React.startTransition(() => setActivePanel(item.panelType));
-                  if (item.panelType === "clipboard") markClipboardRead();
+                  if (item.panelType !== activePanel) requestVaultNavigation(() => {
+                    React.startTransition(() => setActivePanel(item.panelType));
+                    if (item.panelType === "clipboard") markClipboardRead();
+                  });
                 }}
                 title={t(titleKey)}
               >

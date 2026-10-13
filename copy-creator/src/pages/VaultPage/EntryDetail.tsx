@@ -4,42 +4,37 @@ import { invoke } from "@tauri-apps/api/core";
 import { Icons } from "../../components/Icons";
 import { useVaultStore } from "../../stores/vaultStore";
 import type { VaultEntry } from "../../types/vault";
+import { vaultFieldLabel } from "../../lib/vaultModel";
+import { IdentityLinks } from "./IdentityPicker";
 
-export default function EntryDetail({ entry, onBack, onEdit }: { entry: VaultEntry; onBack: () => void; onEdit: () => void }) {
-  const { t } = useTranslation();
-  const { copyField, pasteField, deleteEntry, busy, setError } = useVaultStore();
+export function VaultFields({ entry }: { entry: VaultEntry }) {
+  const { t } = useTranslation(); const { busy, copyField, pasteField, setError } = useVaultStore();
   const [revealed, setRevealed] = useState<string[]>([]);
-  const [deleting, setDeleting] = useState(false);
-  const row = (key: string, label: string, value: string, sensitive = false) => value ? <div className="vault-detail-row" key={key}>
-    <div className="vault-detail-content"><span className="vault-detail-label">{label}</span><span className={sensitive ? "vault-detail-value secret" : "vault-detail-value"}>{sensitive && !revealed.includes(key) ? "••••••••••••" : value}</span></div>
+  return <div className="v2-fields">{entry.fields.filter(field => field.value).map(field => <div className="vault-detail-row" key={field.id}>
+    <div className="vault-detail-content">{field.purpose && !field.purpose.startsWith("legacy_base:") && <span className="vault-method-badge">{t(`vault.methods.${field.purpose.replace(/_note$/, "")}`)}{field.purpose.endsWith("_note") && ` · ${t("vault.verificationNote")}`}</span>}<span className="vault-detail-label">{vaultFieldLabel(field, t)}</span><button type="button" className={`v2-field-value ${field.sensitive ? "secret" : ""}`} disabled={busy} aria-label={`${t("vault2.paste")} ${vaultFieldLabel(field, t)}`} onClick={event => {
+      const selection = window.getSelection();
+      if (selection?.toString() && (event.currentTarget.contains(selection.anchorNode) || event.currentTarget.contains(selection.focusNode))) return;
+      void pasteField(entry.id, `field:${field.id}`);
+    }}>{field.sensitive && !revealed.includes(field.id) ? "••••••••••••" : field.value}</button></div>
     <div className="vault-detail-actions">
-      {sensitive && <button type="button" className="vault-text-button" disabled={busy} onClick={() => setRevealed((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])}>{t(revealed.includes(key) ? "vault.hide" : "vault.show")}</button>}
-      <button type="button" className="vault-icon-button" disabled={busy} aria-label={`${t("vault.copy")} ${label}`} title={t("vault.copy")} onClick={() => void copyField(entry.id, key)}>{Icons.copy}</button>
-      <button type="button" className="vault-button secondary small" disabled={busy} aria-label={`${t("vault.fill")} ${label}`} title={t("vault.fillHint")} onClick={() => void pasteField(entry.id, key)}>{Icons.paste}{t("vault.fill")}</button>
+      {field.sensitive && <button type="button" className="vault-text-button" disabled={busy} aria-label={`${t(revealed.includes(field.id) ? "vault.hide" : "vault.show")} ${vaultFieldLabel(field, t)}`} onClick={() => setRevealed(ids => ids.includes(field.id) ? ids.filter(id => id !== field.id) : [...ids, field.id])}>{t(revealed.includes(field.id) ? "vault.hide" : "vault.show")}</button>}
+      {field.type === "url" && <button type="button" className="vault-icon-button" aria-label={`${t("vault2.openUrl")} ${vaultFieldLabel(field, t)}`} disabled={busy} onClick={() => void invoke("open_external_link", { url: field.value }).catch(error => setError(String(error)))}>{Icons.link}</button>}
+      <button type="button" className="vault-icon-button" aria-label={`${t("vault.copy")} ${vaultFieldLabel(field, t)}`} disabled={busy} onClick={() => void copyField(entry.id, `field:${field.id}`)}>{Icons.copy}</button>
     </div>
-  </div> : null;
-  const openWebsite = async () => {
-    try { await invoke("open_external_link", { url: entry.website }); }
-    catch (error) { setError(String(error)); }
-  };
-  return <div className="vault-detail">
-    <div className="vault-subheader"><button type="button" className="vault-text-button" onClick={onBack}>← {t("vault.back")}</button><div className="vault-actions"><button type="button" className="vault-icon-button" title={t("vault.editEntry")} aria-label={t("vault.editEntry")} onClick={onEdit}>{Icons.edit}</button><button type="button" className="vault-icon-button danger-text" title={t("vault.deleteEntry")} aria-label={t("vault.deleteEntry")} onClick={() => setDeleting(true)}>{Icons.delete}</button></div></div>
-    <div className="vault-detail-heading"><div className="vault-site-avatar">{entry.title.slice(0, 1).toUpperCase()}</div><div><h2>{entry.title}</h2>{entry.website && <button className="vault-text-button vault-domain" type="button" onClick={openWebsite}>{entry.website} ↗</button>}</div></div>
+  </div>)}</div>;
+}
+
+export default function EntryDetail({ entry, onEdit, onDeleted, onIdentity, identityProfile = false }: { entry: VaultEntry; onEdit: () => void; onDeleted: () => void; onIdentity: (id: string) => void; identityProfile?: boolean }) {
+  const { t } = useTranslation(); const { busy, deleteEntry } = useVaultStore(); const [deleting, setDeleting] = useState(false);
+  return <div className={`v2-entry-detail ${identityProfile ? "v2-profile" : ""}`}>
+    <div className="v2-detail-tools"><button type="button" className="vault-icon-button" aria-label={t(identityProfile ? "vault2.editIdentity" : "vault.editEntry")} disabled={busy} onClick={onEdit}>{Icons.edit}</button><button type="button" className="vault-icon-button danger-text" aria-label={t(identityProfile ? "vault2.deleteIdentity" : "vault.deleteEntry")} disabled={busy} onClick={() => setDeleting(true)}>{Icons.delete}</button></div>
+    {deleting && <div className="vault-confirm" role="alert"><p>{t(identityProfile ? "vault2.deleteIdentityHint" : "vault.deleteConfirm", { title: entry.title })}</p><div className="vault-actions"><button type="button" className="vault-button secondary" autoFocus disabled={busy} onClick={() => setDeleting(false)}>{t("vault.cancel")}</button><button type="button" className="vault-button danger" disabled={busy} onClick={async () => { if (await deleteEntry(entry.id)) onDeleted(); }}>{t(identityProfile ? "vault2.deleteIdentity" : "vault.deleteEntry")}</button></div></div>}
+    {!identityProfile && <IdentityLinks ids={entry.identity_ids} onIdentity={onIdentity} />}
+    {entry.template === "login" && <p className="vault-caption">{t("vault2.loginMethod")} · {t(`vault2.loginMethods.${entry.login_method || "password"}`)}{entry.login_note && <span className="v2-login-note">{entry.login_note}</span>}</p>}
+    {identityProfile ? <details className="v2-profile-fields" open><summary>{t("vault2.identityDetails")}</summary><VaultFields key={entry.id} entry={entry} /></details> : <VaultFields key={entry.id} entry={entry} />}
+    {entry.fields.every(field => !field.value) && <p className="vault-caption">{t("vault2.emptyFields")}</p>}
     {entry.tags.length > 0 && <div className="vault-tags">{entry.tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</div>}
-    <p className="vault-caption vault-fill-hint">{t("vault.fillHint")}</p>
-    {deleting && <div className="vault-confirm" role="alert"><p>{t("vault.deleteConfirm", { title: entry.title })}</p><div className="vault-actions"><button type="button" className="vault-button secondary" onClick={() => setDeleting(false)}>{t("vault.cancel")}</button><button type="button" className="vault-button danger" disabled={busy} onClick={async () => { if (await deleteEntry(entry.id)) onBack(); }}>{t("vault.deleteEntry")}</button></div></div>}
-    <section className="vault-section"><h3>{t("vault.basicAccount")}</h3>
-      {row("username", t("vault.username"), entry.username)}{row("email", t("vault.email"), entry.email)}{row("phone", t("vault.phone"), entry.phone)}{row("password", t("vault.password"), entry.password, true)}
-      {![entry.username, entry.email, entry.phone, entry.password].some(Boolean) && <p className="vault-caption">{t("vault.noAccountInfo")}</p>}
-    </section>
-    {entry.fields.length > 0 && <section className="vault-section"><h3>{t("vault.personalInfo")}</h3>{entry.fields.map((field) => row(`field:${field.id}`, field.label, field.value, field.sensitive))}</section>}
-    {entry.verification.length > 0 && <section className="vault-section"><h3>{t("vault.verification")}</h3>{entry.verification.map((method) => <div className="vault-verification-detail" key={method.id}>
-      <span className="vault-method-badge">{t(`vault.methods.${method.kind}`)}</span>
-      {row(`verification:${method.id}`, method.label, method.value, !["email", "sms", "passkey", "authenticator"].includes(method.kind))}
-      {!method.value && <p className="vault-caption">{method.label}</p>}
-      {method.note && <p className="vault-caption">{method.note}</p>}
-    </div>)}</section>}
-    {entry.notes && <section className="vault-section"><h3>{t("vault.notes")}</h3>{row("notes", t("vault.notes"), entry.notes)}</section>}
-    <p className="vault-caption vault-detail-footnote">{t("vault.updatedAt", { date: new Date(entry.updated_at).toLocaleString() })}</p>
+    <p className="vault-caption v2-field-hint">{t(identityProfile ? "vault2.identityHint" : "vault2.clickHint")}</p>
+    <p className="vault-caption v2-updated">{t("vault.updatedAt", { date: new Date(entry.updated_at).toLocaleString() })}</p>
   </div>;
 }

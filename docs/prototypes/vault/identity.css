@@ -1,0 +1,73 @@
+/* Identity organization extends the existing vault tokens and components. */
+.vault-tabs{display:flex;gap:22px;border-bottom:1px solid var(--separator);margin:-5px 0 24px}
+.vault-tabs>button{display:flex;gap:7px;align-items:center;font-size:12px;padding:9px 0 12px;color:var(--text-secondary);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.vault-tabs>button[aria-pressed=true]{color:var(--accent-text);border-bottom-color:var(--accent);font-weight:500}
+.vault-tabs>button:hover{color:var(--accent-text)}
+.vault-tabs>button>span{font-size:10px;color:var(--text-secondary);background:var(--chip-bg);padding:0 5px;border-radius:4px;font-variant-numeric:tabular-nums}
+.identity-overview-heading{margin-bottom:22px}
+.identity-overview-heading h2{font-size:18px;font-weight:600;letter-spacing:-.4px}
+.identity-overview-heading p{font-size:11px;line-height:1.8;color:var(--text-secondary);margin-top:6px}
+.identity-card{display:flex;align-items:center;gap:4px;background:var(--card-inner-bg);border:1px solid var(--separator);border-radius:14px;padding:4px 13px 4px 4px}
+.identity-card-main{display:flex;align-items:center;text-align:left;gap:15px;padding:17px 11px;flex:1;min-width:0;border-radius:11px}
+.identity-card-main:hover{background:var(--chip-bg)}
+.identity-avatar{flex-shrink:0;display:grid;place-items:center;width:44px;height:48px;border-radius:12px;background:var(--chip-bg);color:var(--text-secondary);font-size:17px;font-weight:500;line-height:1}
+.identity-avatar.work-avatar{background:var(--accent-bg);color:var(--accent-text)}
+.identity-card-text{display:flex;flex-direction:column;gap:3px;min-width:0}
+.identity-card-text strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.identity-card-text>span{font-size:11px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.identity-card-text small{font-size:10px;color:var(--text-secondary);margin-top:4px}
+.independent-entry{width:100%;display:flex;align-items:center;justify-content:space-between;text-align:left;gap:12px;margin-top:22px;padding:17px 3px;border-top:1px solid var(--separator);border-bottom:1px solid var(--separator)}
+.independent-entry:hover{color:var(--accent-text)}
+.independent-entry strong{font-size:12px;font-weight:500;display:block}
+.independent-entry small{display:block;font-size:10.5px;color:var(--text-secondary);margin-top:4px}
+.independent-count{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--text-secondary)}
+.identity-detail-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:-10px;margin-bottom:15px}
+.identity-detail-top>.quiet{padding-left:0}
+.identity-profile{margin-bottom:24px}
+.identity-profile-title{display:flex;align-items:center;gap:13px;margin-bottom:17px}
+.identity-profile-title h2{font-size:20px;font-weight:600;letter-spacing:-.5px;overflow-wrap:anywhere}
+.identity-profile-title>div{min-width:0}
+.identity-profile-title>div>span{font-size:10.5px;color:var(--text-secondary)}
+.identity-information{border:1px solid var(--separator);background:var(--card-inner-bg);border-radius:12px;padding:0 14px}
+.identity-information>summary{font-size:11px;font-weight:500;color:var(--text-secondary);padding:12px 0;cursor:pointer}
+.identity-information[open]>summary{border-bottom:1px solid var(--separator)}
+.identity-information .field-row{padding:8px 0}
+.identity-information .field-value{font-size:12px}
+.profile-separation{font-size:10px;line-height:1.8;color:var(--text-secondary);margin:9px 2px 0}
+.related-heading{font-size:13px;font-weight:600;margin-bottom:12px}
+.identity-links{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0 2px}
+.identity-link{display:inline-flex;align-items:center;gap:5px;padding:4px 6px;border-radius:6px;background:var(--chip-bg);color:var(--text-secondary);font-size:10px;max-width:100%;overflow-wrap:anywhere;line-height:1.5}
+.identity-link:hover{background:var(--accent-bg);color:var(--accent-text)}
+.identity-link>span:last-child{color:var(--text-tertiary);font-size:9px}
+.identity-avatar.small-avatar{width:17px;height:18px;font-size:9px;border-radius:4px}
+.collapsed-identity{padding:0 14px 10px 59px}
+.collapsed-identity .identity-links{margin:0}
+.independent-label{font-size:10px;color:var(--text-secondary);margin:10px 0 4px}
+.collapsed-identity .independent-label{margin:0}
+.identity-filter{padding:7px 9px;font-size:11px;margin-top:11px;background:transparent;border-color:var(--separator)}
+.identity-assignment{padding:0;margin:0 0 20px;border:0;min-width:0}
+.identity-assignment legend{font-size:11px;font-weight:500;color:var(--text-secondary);margin-bottom:8px;padding:0}
+.identity-choices{display:flex;flex-wrap:wrap;gap:7px;max-height:130px;overflow:auto;padding:3px}
+.identity-choice{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid var(--separator);border-radius:8px;font-size:11px;cursor:pointer;max-width:100%;overflow-wrap:anywhere}
+.identity-choice.chosen{border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:var(--accent-bg)}
+.identity-choice input{flex-shrink:0}
+.identity-assignment>p,.identity-editor-hint{font-size:10px;line-height:1.8;color:var(--text-secondary);margin-top:7px}
+.identity-editor-hint{margin:-6px 0 18px}
+.login-editor{margin:0 0 21px;padding:13px;background:var(--chip-bg);border-radius:10px}
+.login-editor select,.login-editor input{font-size:11px;padding:8px}
+.login-editor .form-label:not(:first-child){margin-top:10px}
+.login-editor p{font-size:10px;color:var(--text-secondary);margin-top:8px}
+.login-description{margin-top:13px;font-size:10px;color:var(--text-secondary)}
+.login-description>strong{font-weight:500;color:var(--text-primary);margin-left:10px}
+.login-description p{margin-top:3px;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:460px){
+  .vault-tabs{gap:18px;margin-bottom:20px}.vault-tabs>button{font-size:11px;gap:5px}
+  .identity-overview-heading h2{font-size:15px}.identity-overview-heading p{font-size:10.5px}
+  .identity-card{padding-right:6px}.identity-card-main{gap:9px;padding:14px 7px}
+  .identity-avatar{width:34px;height:39px;font-size:15px;border-radius:9px}
+  .identity-card-text strong{font-size:12px}.identity-card-text>span{font-size:10px}
+  .identity-profile-title h2{font-size:17px}.identity-profile-title{gap:10px}
+  .identity-information{padding:0 10px}.identity-information .field-value{font-size:11px}
+  .identity-choice{padding:6px;font-size:10px;gap:5px}.identity-choices{gap:5px}
+  .collapsed-identity{padding-left:45px}.identity-detail-top{margin-top:-5px}
+}

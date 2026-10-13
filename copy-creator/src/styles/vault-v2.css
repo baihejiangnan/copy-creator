@@ -1,0 +1,54 @@
+/* Identity/entry layout uses the application's existing fonts and theme tokens. */
+.vault-page{--vault-tint:var(--accent);--vault-tint-bg:var(--accent-bg)}
+.vault-page .vault-button.primary{background:var(--accent);color:#fff}
+.vault-page button:focus-visible,.vault-page select:focus-visible,.vault-page summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;box-shadow:none}
+.vault-page select{font:inherit;color:var(--text-primary);background:var(--card-inner-bg);border:1px solid var(--separator);border-radius:8px;padding:7px 9px;max-width:100%;min-width:0}
+.v2-tabs{display:flex;gap:24px;border-bottom:1px solid var(--separator);margin-bottom:5px}
+.v2-tabs button{display:flex;gap:7px;align-items:center;background:none;border:0;border-bottom:2px solid transparent;padding:8px 0 12px;margin-bottom:-1px;font:500 12px var(--font);color:var(--text-secondary);cursor:pointer}
+.v2-tabs button[aria-pressed=true]{color:var(--accent);border-bottom-color:var(--accent)}
+.v2-tabs button span{font-size:10px;background:var(--chip-bg);border-radius:4px;padding:1px 5px;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.v2-create{flex-shrink:0}.v2-list,.v2-template-list{display:flex;flex-direction:column;gap:10px}
+.v2-identity-card{display:flex;align-items:center;gap:5px;border:1px solid var(--separator);border-radius:14px;background:var(--card-inner-bg);padding:4px 10px 4px 4px}
+.v2-identity-main,.v2-service-toggle{display:flex;gap:12px;align-items:center;flex:1;min-width:0;text-align:left;border:0;border-radius:11px;background:none;color:var(--text-primary);padding:14px 10px;font:inherit;cursor:pointer}
+.v2-identity-main:hover,.v2-service-toggle:hover{background:var(--chip-bg)}
+.v2-identity-main>span:nth-child(2),.v2-service-toggle>span:nth-child(2){display:flex;flex-direction:column;gap:4px;min-width:0}
+.v2-identity-main strong,.v2-service-toggle strong{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v2-identity-main small,.v2-service-toggle small{font-size:11px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v2-avatar{display:inline-grid;place-items:center;width:40px;height:44px;flex-shrink:0;border-radius:11px;background:var(--chip-bg);font-size:17px;color:var(--text-secondary);font-weight:500}
+.v2-avatar.work,.v2-symbol{color:var(--accent);background:var(--accent-bg)}
+.v2-symbol{display:inline-grid;place-items:center;width:35px;height:35px;flex-shrink:0;border-radius:10px}.v2-symbol svg{width:18px;height:18px}
+.v2-chevron{margin-left:auto;color:var(--text-secondary);flex-shrink:0;transition:transform .2s}.open>.v2-service-heading .v2-chevron{transform:rotate(90deg)}
+.v2-service-card{border:1px solid var(--separator);border-radius:14px;background:var(--card-inner-bg);overflow:hidden}
+.v2-service-card.open{border-color:color-mix(in srgb,var(--accent) 35%,var(--separator))}
+.v2-service-heading{display:flex;align-items:center;gap:4px;padding:3px 10px 3px 3px}
+.v2-entry-detail{display:flex;flex-direction:column;gap:10px;padding:0 15px 14px;border-top:1px solid var(--separator)}
+.v2-detail-tools{display:flex;justify-content:flex-end;gap:7px;padding-top:10px}
+.v2-field-value{display:block;max-width:100%;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;border:0;background:none;color:var(--text-primary);font:13px/1.7 var(--font);padding:4px 6px;margin-left:-6px;border-radius:6px;cursor:pointer}
+.v2-field-value.secret{font-family:var(--font-mono,monospace)}
+.v2-field-value:hover{background:var(--accent-bg);color:var(--accent)}
+.v2-entry-detail .vault-detail-content{flex:1;min-width:0}.v2-entry-detail .vault-detail-actions{flex-shrink:0}.v2-entry-detail .vault-detail-actions .vault-icon-button{background:none}
+.v2-profile{padding:0;border:0;background:none}.v2-profile-fields{padding:0 13px 10px;background:var(--card-inner-bg);border:1px solid var(--separator);border-radius:12px}
+.v2-profile-fields summary{padding:11px 0;cursor:pointer;font-size:11px;font-weight:500;color:var(--text-secondary)}
+.v2-profile-fields[open] summary{border-bottom:1px solid var(--separator)}
+.v2-field-hint,.v2-updated{font-size:10px}.v2-back-identities{align-self:flex-start}.v2-related-heading{margin-top:8px!important}
+.v2-independent{display:flex;align-items:center;justify-content:space-between;gap:14px;text-align:left;border:0;border-top:1px solid var(--separator);border-bottom:1px solid var(--separator);background:none;color:var(--text-primary);font:inherit;padding:17px 3px;margin-top:12px;cursor:pointer}
+.v2-independent>span:first-child{display:flex;flex-direction:column;gap:5px}.v2-independent strong{font-size:12px;font-weight:500}.v2-independent small{font-size:11px;color:var(--text-secondary)}
+.v2-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--text-secondary);margin-top:10px;font-variant-numeric:tabular-nums}
+.v2-filter{display:flex;gap:8px;align-items:center}.v2-filter select{flex:1;font-size:11px}
+.v2-identity-links{display:flex;gap:5px;flex-wrap:wrap}.v2-identity-links .vault-text-button{font-size:10px;background:var(--chip-bg);overflow-wrap:anywhere;max-width:100%}
+.v2-login-note{display:block;margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere}
+.v2-template{width:100%;display:flex;align-items:center;gap:12px;border:1px solid var(--separator);border-radius:11px;padding:14px;background:var(--card-inner-bg);color:var(--text-primary);text-align:left;font:inherit;cursor:pointer}
+.v2-template:hover{background:var(--accent-bg);border-color:var(--accent)}
+.v2-template>span:nth-child(2){display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}.v2-template strong{font-size:12px;font-weight:500}.v2-template small{font-size:10.5px;color:var(--text-secondary)}
+.v2-more-presets{display:flex;flex-direction:column;gap:10px}.v2-preset-scroll{max-height:245px;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:3px}
+.v2-editor-body{border:0;padding:0;margin:0;min-width:0;display:flex;flex-direction:column;gap:18px}.v2-title-input input{font-weight:500;font-size:16px!important}
+.v2-editor-fields{display:flex;flex-direction:column;gap:12px}.v2-editor .vault-custom-heading{gap:4px}.v2-editor .vault-custom-heading .vault-icon-button{width:25px;height:25px;background:none}.v2-editor .vault-custom-heading .vault-icon-button svg{width:13px;height:13px}
+.v2-editor .vault-custom-footer select{font-size:10.5px;padding:4px 6px;max-width:55%}.v2-editor .vault-input-actions{gap:4px}.v2-editor .vault-input-actions textarea{flex:1;min-width:0}
+.v2-add-field{align-self:flex-start;color:var(--accent)}.v2-field-picker{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;background:var(--card-inner-bg);border:1px solid var(--separator);border-radius:10px;padding:8px;max-height:220px;overflow:auto}
+.v2-field-picker button{justify-content:flex-start;font-size:11px}.v2-optional{font-size:11px;color:var(--text-secondary)}.v2-optional summary,.v2-assignment summary{cursor:pointer;padding:6px 0}.v2-optional .vault-form-field{margin-top:10px}.v2-assignment{font-size:11px}.v2-assignment>.vault-caption{margin:5px 0 12px}
+.v2-login-editor{padding:13px;border-radius:10px;background:var(--chip-bg);display:flex;flex-direction:column;gap:10px}.v2-login-editor .vault-caption{font-size:10px}
+.v2-identity-picker{display:flex;flex-direction:column;gap:9px}.v2-identity-choices{display:flex;flex-direction:column;gap:5px;max-height:200px;overflow:auto;padding:3px}
+.v2-identity-choice{display:flex;align-items:center;gap:8px;text-align:left;padding:9px;border:1px solid var(--separator);background:var(--card-inner-bg);border-radius:8px;font:inherit;color:var(--text-primary);cursor:pointer}
+.v2-identity-choice.chosen{background:var(--accent-bg);border-color:var(--accent)}.v2-identity-choice strong{font-size:11px;font-weight:500;display:block}.v2-identity-choice small{font-size:10px;color:var(--text-secondary);display:block;overflow-wrap:anywhere}.v2-identity-choice>span{min-width:0}
+@container(max-width:380px){.v2-create{padding:8px}.v2-create>span{display:none}.v2-tabs{gap:18px}.v2-tabs button{font-size:11px}.v2-identity-main,.v2-service-toggle{gap:8px;padding:12px 7px}.v2-avatar{width:32px;height:36px;font-size:15px}.v2-symbol{width:30px;height:30px}.v2-entry-detail{padding-left:11px;padding-right:11px}.v2-field-value{font-size:12px}.v2-entry-detail .vault-detail-actions{gap:2px}.v2-entry-detail .vault-detail-actions .vault-text-button{font-size:10px;padding:4px}.v2-tabs button span{font-size:9px}}
+@media(prefers-reduced-motion:reduce){.v2-chevron{transition:none}}

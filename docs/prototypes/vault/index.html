@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Copy Creator 保险箱交互原型，使用合成资料展示身份档案、关联服务、自由字段与点击粘贴。">
+  <title>保险箱交互原型 · Copy Creator</title>
+  <link rel="icon" href="../../site-previews/assets/logo.png">
+  <link rel="stylesheet" href="vault.css">
+  <link rel="stylesheet" href="identity.css">
+  <script src="icons.js" defer></script>
+  <script src="identity.js" defer></script>
+  <script src="vault.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#workspace" data-i18n="skip">跳到保险箱</a>
+  <header class="preview-bar">
+    <div><strong>Copy Creator</strong><span data-i18n="prototype">保险箱交互原型</span></div>
+    <div class="preview-controls">
+      <button id="theme" class="quiet" type="button">深色</button>
+      <button id="language" class="quiet" type="button">English</button>
+      <button id="reset" class="quiet" type="button" data-i18n="reset">重置示例</button>
+    </div>
+  </header>
+  <div class="preview-layout">
+    <section class="app-window" aria-label="Copy Creator">
+      <aside class="sidebar" aria-label="模块">
+        <div class="brand" data-icon="logo"></div>
+        <nav>
+          <button type="button" disabled data-nav="clipboard" data-icon="clipboard" title="剪贴板"></button>
+          <button type="button" disabled data-nav="notes" data-icon="notes" title="随记"></button>
+          <button type="button" disabled data-nav="translate" data-icon="translate" title="翻译"></button>
+          <button type="button" class="active" id="vault-nav" data-icon="vault" title="保险箱" aria-current="page"></button>
+        </nav>
+        <span class="sidebar-caption" data-i18n="vault">保险箱</span>
+        <div class="sidebar-foot" data-icon="logo"></div>
+      </aside>
+      <main class="workspace" id="workspace" tabindex="-1">
+        <header class="app-header">
+          <div class="app-heading"><span class="heading-icon" data-icon="vault"></span><h1 data-i18n="vault">保险箱</h1></div>
+          <div class="header-actions"><span id="lock-state" class="session-state"></span><button type="button" id="lock" class="icon-button" data-icon="lock"></button></div>
+        </header>
+        <div id="content" class="content"></div>
+        <div id="feedback" class="feedback" role="status" aria-live="polite" hidden></div>
+      </main>
+    </section>
+    <aside class="try-panel">
+      <p class="eyebrow" data-i18n="tryEyebrow">试一试</p>
+      <h2 data-i18n="tryTitle">把字段放到正确的位置</h2>
+      <p class="try-intro" data-i18n="tryIntro">先点击下方输入框，再点击左侧条目中的字段值。这里模拟你正在使用的另一个应用。</p>
+      <section class="target-window" aria-labelledby="target-heading">
+        <div class="target-title"><span data-icon="server"></span><h3 id="target-heading" data-i18n="connection">远程连接</h3></div>
+        <label class="form-label" for="target-host" data-i18n="address">服务器地址</label>
+        <input id="target-host" class="target-input mono" autocomplete="off" spellcheck="false" placeholder="lin.work@example.com / 203.0.113.24">
+        <label class="form-label" for="target-password" data-i18n="authPassword">认证密码</label>
+        <div class="target-password"><input id="target-password" class="target-input mono" type="password" autocomplete="off" placeholder="••••••••••••"><button type="button" id="target-reveal" class="quiet" data-i18n="show">显示</button></div>
+        <p id="target-status" class="target-status" role="status"></p>
+        <button type="button" id="clear-target" class="quiet" data-i18n="clearTarget">清空输入</button>
+      </section>
+      <div class="interaction-note"><span data-icon="paste"></span><p data-i18n="clickHint">标题用来展开，字段值用来粘贴。密码保持隐藏时，也可以直接点击。</p></div>
+      <div class="prototype-note"><strong data-i18n="synthetic">仅使用合成示例</strong><p data-i18n="boundary">内容只保留在本页内存中。复制与粘贴仅在原型内演示，不读写系统剪贴板，也不连接真实保险箱。</p></div>
+      <a class="spec-link" href="../../features/website-vault.md" data-i18n="specLink">查看完整方案 ↗</a>
+    </aside>
+  </div>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="dialog-actions"><button type="button" id="confirm-cancel" class="button secondary"></button><button type="button" id="confirm-accept" class="button danger"></button></div></dialog>
+</body>
+</html>

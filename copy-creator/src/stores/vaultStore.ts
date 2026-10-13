@@ -1,19 +1,26 @@
 import { create } from "zustand";
+import { LatestQuery } from "../lib/latestQuery";
 import { invoke } from "@tauri-apps/api/core";
 import { getStorageIdentity, invokeStorage, isCurrentStorageIdentity, onStorageIdentity } from "../lib/storageIdentity";
-import type { VaultAutoLock, VaultEntry, VaultStatus, VaultSummary } from "../types/vault";
+import type { VaultAutoLock, VaultEntry, VaultStatus, VaultSummary, VaultQueryPage } from "../types/vault";
 import { normalizeVaultAutoLock, VAULT_AUTO_LOCK_OPTIONS } from "../types/vault";
 
 let epoch = 0;
 let listRequest = 0;
 let detailRequest = 0;
+let listGeneration = 0;
+const queries = new LatestQuery<VaultQueryPage>();
 
 interface VaultState {
   status: VaultStatus | null;
   entries: VaultSummary[];
+  total: number; identityTotal: number; detailTotal: number; independentTotal: number;
+  queryKind: "entry" | "identity"; queryIdentity: string; offset: number;
+  setQuery: (kind: "entry" | "identity", identity?: string, offset?: number) => void;
   selected: VaultEntry | null;
   search: string;
   busy: boolean;
+  listing: boolean;
   settingBusy: boolean;
   error: string | null;
   notice: string | null;
@@ -48,7 +55,7 @@ export const useVaultStore = create<VaultState>((set, get) => {
     else set({ error: message, busy: false });
   };
   return {
-    status: null, entries: [], selected: null, search: "", busy: false, settingBusy: false, error: null, notice: null,
+    status: null, entries: [], total: 0, identityTotal: 0, detailTotal: 0, independentTotal: 0, queryKind: "identity", queryIdentity: "", offset: 0, selected: null, search: "", busy: false, listing: false, settingBusy: false, error: null, notice: null,
     initialize: async () => {
       const current = epoch;
       try {
@@ -75,7 +82,7 @@ export const useVaultStore = create<VaultState>((set, get) => {
     clearLocked: () => {
       cancelNotice();
       epoch++; listRequest++; detailRequest++;
-      set({ status: { configured: get().status?.configured ?? true, unlocked: false, auto_lock: get().status?.auto_lock ?? "3hours" }, entries: [], selected: null, search: "", error: null, notice: null, busy: false });
+      set({ status: { configured: get().status?.configured ?? true, unlocked: false, auto_lock: get().status?.auto_lock ?? "3hours" }, entries: [], total: 0, identityTotal: 0, detailTotal: 0, independentTotal: 0, queryKind: "identity", queryIdentity: "", offset: 0, selected: null, search: "", error: null, notice: null, busy: false, listing: false });
     },
     lock: async () => {
       get().clearLocked();
@@ -96,14 +103,25 @@ export const useVaultStore = create<VaultState>((set, get) => {
         if (origin !== undefined && isCurrentStorageIdentity(origin)) set({ error: "vault.autoLockSaveFailed" });
       } finally { if (origin === undefined || isCurrentStorageIdentity(origin)) set({ settingBusy: false }); }
     },
-    setSearch: (search) => set({ search }),
+    setSearch: (search) => { listRequest++; set({ search, offset: 0, entries: [], listing: true }); },
+    setQuery: (queryKind, queryIdentity = "", offset = 0) => { listRequest++; set({ queryKind, queryIdentity, offset, entries: [], total: 0, listing: true }); },
     setError: (error) => set({ error }),
     refresh: async () => {
       const current = epoch; const request = ++listRequest;
+      set({ listing: true });
       try {
-        const entries = await invokeStorage<VaultSummary[]>("list_vault_entries", { search: get().search });
-        if (current === epoch && request === listRequest && get().status?.unlocked) set({ entries });
+        const state = get(); const generation = listGeneration;
+        const origin = await getStorageIdentity();
+        if (current !== epoch) return;
+        const args = { search: state.search, kind: state.queryKind, identity: state.queryIdentity, offset: state.offset };
+        const page = await queries.run(JSON.stringify([origin, current, generation, args]), () => {
+          if (current !== epoch || !get().status?.unlocked) return Promise.reject("vault.locked");
+          return invokeStorage<VaultQueryPage>("query_vault_entries", args, origin);
+        });
+        if (!page) return;
+        if (current === epoch && request === listRequest && get().status?.unlocked) set({ entries: page.entries, total: page.total, identityTotal: page.identity_total, detailTotal: page.detail_total, independentTotal: page.independent_total });
       } catch (error) { handleError(error, current); }
+      finally { if (current === epoch && request === listRequest) set({ listing: false }); }
     },
     openEntry: async (id) => {
       const current = epoch; const request = ++detailRequest;
@@ -122,6 +140,7 @@ export const useVaultStore = create<VaultState>((set, get) => {
       try {
         const id = await invokeStorage<string>("save_vault_entry", { entry });
         if (current !== epoch) return false;
+        listGeneration++;
         await get().refresh();
         return await get().openEntry(id);
       } catch (error) { handleError(error, current); return false; }
@@ -132,7 +151,7 @@ export const useVaultStore = create<VaultState>((set, get) => {
       try {
         await invokeStorage("delete_vault_entry", { id });
         if (current !== epoch) return false;
-        get().clearSelected(); await get().refresh(); return true;
+        listGeneration++; get().clearSelected(); await get().refresh(); return true;
       } catch (error) { handleError(error, current); return false; }
       finally { if (current === epoch) set({ busy: false }); }
     },
