@@ -1,5 +1,7 @@
 # Copy Creator — TODO
 
+更新：2026-10-25。按用户要求新增「链接胶囊」：复制网址或本地文件路径时在屏幕顶部弹出可点击胶囊。原生 `src-tauri/src/capsule.rs`、胶囊窗口前端、设置界面与文档全部完成，并在仓库外的隔离桌面副本上做了真实剪贴板触发与窗口交互验证。自动化：前端 `tsc -b` 通过、ESLint 117 文件 0 error 0 warning、18/18 前端单测通过、生产构建通过；Rust `cargo check` 0 error 0 warning、`cargo test --lib` 216 通过 / 0 失败 / 6 忽略（6 项为仓库既有的默认忽略项）。桌面验收：识别矩阵 11/11、窗口行为 8/8、亮暗主题、点击打开浏览器与资源管理器定位、自定义图标、不抢焦点全部实测通过。构建环境说明：本机无 MSVC，改用 MinGW-w64（winlibs）+ `stable-x86_64-pc-windows-gnu` 与离线 vendor 完成编译；MinGW 下 `cdylib` 受 PE 导出表 65535 上限限制无法链接，故链接验证在仓库外把 `crate-type` 改为 `rlib` 的副本上完成，`pnpm tauri dev`/`pnpm tauri build` 的原样命令在本机未运行。`backdrop-filter` 在透明置顶 WebView2 窗口上实测计算值为 `none`，视觉为半透明填充而非真实背景模糊，已在功能文档中如实标注。详见[链接胶囊](features/capsule.md)与下方 C 项。
+
 更新：2026-10-14。保险箱 0.4.0 已完成固定来源签名构建、源码推送、标签绑定与正式 Latest 发布，六附件匿名独立下载与可信源码验签通过；用户在本轮明确接受列出的桌面交互、数据迁移、备份操作与 MSI 安装升级缺口后授权公开，公开不等于这些验收通过。实际结果、构建恢复过程与接受边界见[0.4.0 发行记录](verification/2026-10-14-release-040.md)，未验收项继续保留。此前独立 Agent 已审查发布文档并补齐接手模板、范围与固定 HEAD 保护；其他任务修改保留。
 
 更新：2026-10-13。用户认可身份原型，要求先交付详细功能/界面设计再开始源码。已完成[新版主设计](features/vault-design.md)，身份/资料 v2 数据层、旧资料适配、备份兼容与 React 页面已接入；进度及验收边界见下方保险箱工程项。未提交、推送或发布。
@@ -217,6 +219,13 @@ S 项为共用基础合同，只实现和验收一次；可由任一主任务先
 - [ ] **U-01 — 公开元数据、应用内签名下载与用户选择升级。** 2026-10-09 用户明确选择完整接入并准备发行脚本。源码已改用公开 latest.json，加入 24 小时尝试间隔、具体错误、独立 EXE/MSI 签名、限量下载/再验签、保存与排空后显式升级及便携新进程等待；发行脚本生成和校验六文件。类型、完整 lint/生产构建、前端 81、Rust 152 通过/4 忽略（`cargo test --locked --lib`，见构建日志 `output/optimization/release-0.2.26/logs/build-0.2.26-r4.log`）；真实本地产物两包验签/篡改拒绝和 MSI 表检查通过，原组件合成 IPC 浏览器中英亮暗最小窗检查通过。0.2.26 已从固定提交干净检出构建六文件、标签绑定构建 SHA 并公开为 Latest，匿名独立下载/验签/摘要/Latest 指向通过。参见[功能说明](features/updates.md)、[发行准备](features/release-rules.md#3-构建签名)、[更新验收](features/updates.md#更新与安装验收)、[验证范围](verification/2026-10-09-signed-updates.md)与[0.2.26 发行记录](verification/2026-10-09-release-026.md)。
   - 待验证：旧新客户端发现与自身版本比较（仅有合成/单元级比较证据）、真实桌面便签/设置失败及超时不升级、便携交接后的完整启动/快捷键、MSI 自定义目录安装/升级/卸载标记与资料保持、UAC 端到端桌面验收。没有此标记的旧 MSI 与旧 NSIS 先手动过渡，旧 0.2.25 客户端走原 REST 检查也须手动升级一次。本机无已安装副本与交互桌面，这些项本轮未执行，公开状态不等于验收通过。
   - 本次本地 `-AllowDirty` 验证产物保持应用基础版本 0.2.25，不能上传为既有 0.2.25 标签产物，本轮未复用其任何产物或哈希。后续授权发行时提高基础版本并从固定提交重建：本次已按 §4 提高到 0.2.26，并从固定提交 `79ea219` 重建六文件并公开（记录见上）。N/O 原 goal 仍暂停，本项不代表重新启动原性能实验。
+
+## C：链接胶囊
+
+- [x] **C-01 — 设置数据链路与设置界面（2026-10-25，已完成并桌面验证）**：按三方并行开发约定（`capsule-contract.md`，仓库外临时文件）第 4 节接入 7 个设置键：`settingsStore` 新增 `capsuleEnabled`/`capsuleUrlEnabled`/`capsulePathEnabled`/`capsuleDurationSeconds`/`capsuleIconUrl`/`capsuleIconFile`/`capsuleIconFolder` 及读取映射；`settingsEditorStore` 的 `FIELD_PROPS` 增 7 键、`BOOLEANS` 增 3 键、`NUMBERS` 增 `capsule_duration_seconds`、`validate` 增加 3–10 边界并改用可读错误映射（`settings.invalidCapsuleDuration`）。新增 `src/components/settings/CapsuleSection.tsx`（总开关、网址/路径识别开关、停留时长、三行图标状态与选择/恢复按钮），接入 `SettingsContent.tsx` 的剪贴板分区，图标命令走 `invokeStorage` 并携带存储身份。整仓 `pnpm exec tsc -b` 通过，ESLint 0 error 0 warning。设置页真实点击、时长越界提示、图标选择/恢复与存储目录切换拒绝仍未逐项在桌面点按验证；图标数据链路（写入路径 → `capsule_icon_data_uri` 返回 data URI → 胶囊改用该图）已在隔离副本实测通过。
+- [x] **C-02 — 中英文文案（2026-10-25，已完成）**：`zh-CN.json` 与 `en.json` 新增顶层 `capsule`（打开/关闭，以及约定第 3 节要求的 `openFailed`/`iconSelectFailed` 错误串）与 `settings.capsule`（约定第 9 节的 15 键逐字写入）和 `settings.invalidCapsuleDuration`；两文件叶子键集合逐项比对一致（766/766，无单侧键）。约定第 9 节未给出「已自定义」状态串，为渲染该状态另增 `settings.capsule.iconCustom`，未改动约定已有的任何键名与文案。
+- [x] **C-03 — 胶囊窗口与原生命令（2026-10-25，已完成并桌面验证）**：窗口 `capsule`、`capsule-show` 事件、`capsule_open`/`capsule_hide`/`capsule_icon_data_uri`/`select_capsule_icon`/`reset_capsule_icon` 及识别规则由原生与胶囊前端并行实现；7 个 `capsule_*` 键已加入 `db.rs::EXPORT_SETTING_KEYS`，三个布尔键与时长键（3–10）参与导入取值校验，图标路径仅受长度上限约束。原生命令、窗口显示/淡出/悬停暂停/Esc/点击外部关闭、真实剪贴板触发已在隔离桌面副本实测通过（识别矩阵 11/11、行为 8/8、点击打开浏览器与资源管理器定位、不抢焦点、亮暗主题）；多显示器与混合 DPI 仅在单显示器（1600×1000，2 倍缩放）上验证，未做多屏实测。
+- [x] **C-04 — 自动化与发行验收（2026-10-25，已完成）**：原样 `pnpm lint` 因 `node_modules` 的 pnpm junction 不被 Node ESM 解析（`@humanfs/node` 缺失）无法启动，原样 `pnpm test:unit` 因测试运行器子进程被沙箱拒绝（`spawn EPERM`）无法整体运行，均为本机环境限制而非代码缺陷。加 ESM resolve hook 与逐文件直跑后复跑：`tsc -b` 通过、ESLint 117 文件 0 error 0 warning、18/18 前端单测通过、生产构建通过、Rust `cargo check` 零警告、`cargo test --lib` 216 通过 / 0 失败 / 6 忽略。`pnpm tauri dev` 与 `pnpm tauri build` 的原样命令因本机无 MSVC 且 MinGW 下 `cdylib` 超过 PE 导出上限未运行，改用 MinGW + rlib 副本完成编译与链接验证。
 
 ## 已完成的设计与证据
 

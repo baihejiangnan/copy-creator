@@ -302,6 +302,14 @@
     "conflict": "This entry changed. Your draft was kept. Reload the entry before editing again.",
     "unsavedDraft": "The vault has unsaved changes. Save or explicitly discard them before continuing."
   },
+  "capsule": {
+    "openUrl": "Open link",
+    "openFile": "Open file",
+    "openFolder": "Open folder",
+    "close": "Close",
+    "openFailed": "Could not open this link or file.",
+    "iconSelectFailed": "Could not select the image. Please retry."
+  },
   "settings": {
     "autoSaveHint": "Changes save automatically. Text fields save when you finish editing.",
     "autoSaving": "Saving…",
@@ -318,6 +326,7 @@
     "invalidNumber": "Enter a whole number within the allowed range.",
     "invalidHistoryLimit": "History count must be a whole number between 100 and 100000.",
     "invalidStorageLimit": "Storage limit must be a whole number between 50 and 100000 MB.",
+    "invalidCapsuleDuration": "Duration must be between 3 and 10 seconds",
     "shortcutUnavailable": "This shortcut is unavailable. Your original shortcut is kept. Record another or retry.",
     "awaitingLimitConfirmation": "This change requires confirmation before cleaning up history.",
     "limitConfirmTitle": "Confirm history cleanup",
@@ -411,6 +420,24 @@
     "items": "items",
     "maxStorageSize": "Storage Limit",
     "clipboardNotifications": "New Item Notifications",
+    "capsule": {
+      "title": "Link capsule",
+      "enabled": "Enable link capsule",
+      "enabledHint": "Show a quick capsule at the top of the screen when you copy a link or file path",
+      "url": "Detect web links",
+      "path": "Detect file paths",
+      "duration": "Display duration",
+      "durationUnit": "s",
+      "icons": "Capsule icons",
+      "iconUrl": "Link icon",
+      "iconFile": "File icon",
+      "iconFolder": "Folder icon",
+      "iconDefault": "Default",
+      "iconChoose": "Choose image",
+      "iconReset": "Reset",
+      "iconCustomHint": "Custom icons replace the default capsule icon",
+      "iconCustom": "Custom"
+    },
     "storageUsage": "{{count}} items · {{size}}",
     "favoriteCount": "{{count}} favorites",
     "imageProcessing": "Images",

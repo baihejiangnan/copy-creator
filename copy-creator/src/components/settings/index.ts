@@ -5,6 +5,7 @@ import { ShortcutSection } from "./ShortcutSection";
 import { StartupSection } from "./StartupSection";
 import { ClipboardSection } from "./ClipboardSection";
 import { ImageSection } from "./ImageSection";
+import { CapsuleSection } from "./CapsuleSection";
 import { DataSection } from "./DataSection";
 import { RetentionSection } from "./RetentionSection";
 
@@ -16,6 +17,7 @@ export {
   StartupSection,
   ClipboardSection,
   ImageSection,
+  CapsuleSection,
   DataSection,
   RetentionSection,
 };

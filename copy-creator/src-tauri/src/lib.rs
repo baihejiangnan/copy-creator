@@ -1,3 +1,4 @@
+mod capsule;
 mod clipboard;
 #[cfg(any(not(target_os = "windows"), test))]
 mod clipboard_files;
@@ -374,6 +375,36 @@ pub fn run() {
                 log::info!("Radial menu popup window created");
             }
 
+            // Create the hidden link capsule window. It is created once and
+            // reused for every capsule so rapid copies never stack windows.
+            {
+                use tauri::WebviewUrl;
+                use tauri::WebviewWindowBuilder;
+                let capsule = WebviewWindowBuilder::new(
+                    app,
+                    capsule::WINDOW_LABEL,
+                    WebviewUrl::App("capsule.html".into()),
+                )
+                .title("")
+                .inner_size(capsule::WINDOW_WIDTH, capsule::WINDOW_HEIGHT)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .visible(false)
+                .shadow(false)
+                .skip_taskbar(true)
+                .resizable(false)
+                .focused(false)
+                .focusable(false)
+                .build()?;
+                let _ = capsule.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+                // Clicks must reach the pill, so cursor events stay enabled.
+                let _ = capsule.set_ignore_cursor_events(false);
+                #[cfg(target_os = "windows")]
+                capsule::ensure_no_activate(&capsule);
+                log::info!("Link capsule window created");
+            }
+
             if let Ok(key) = db::get_setting(app.handle().clone(), "shortcut_key".to_string()) {
                 if !key.is_empty() {
                     if let Err(e) = shortcut::register_keyboard_shortcut(app.handle(), &key) {
@@ -439,6 +470,11 @@ pub fn run() {
             db::get_clipboard_records,
             db::get_clipboard_record_content,
             clipboard::open_external_link,
+            capsule::capsule_open,
+            capsule::capsule_hide,
+            capsule::capsule_icon_data_uri,
+            capsule::select_capsule_icon,
+            capsule::reset_capsule_icon,
             updates::get_app_info,
             updates::check_for_updates,
             updates::download_update,

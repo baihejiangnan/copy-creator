@@ -14,13 +14,16 @@ const FIELD_PROPS = {
   autostart: "autostartEnabled", max_history_items: "maxHistoryItems", max_storage_mb: "maxStorageMb",
   image_max_dimension: "imageMaxDimension", image_compression_quality: "imageCompressionQuality",
   large_image_handling: "largeImageHandling", clipboard_notifications: "clipboardNotifications",
+  capsule_enabled: "capsuleEnabled", capsule_url_enabled: "capsuleUrlEnabled", capsule_path_enabled: "capsulePathEnabled",
+  capsule_duration_seconds: "capsuleDurationSeconds", capsule_icon_url: "capsuleIconUrl",
+  capsule_icon_file: "capsuleIconFile", capsule_icon_folder: "capsuleIconFolder",
 } as const;
 export type SettingField = keyof typeof FIELD_PROPS;
 type Values = Record<SettingField, string>;
 const FIELDS = Object.keys(FIELD_PROPS) as SettingField[];
 const SECRETS = new Set<SettingField>(["ai_api_key", "google_api_key"]);
-const NUMBERS = new Set<SettingField>(["dedupe_window_seconds", "max_history_items", "max_storage_mb", "image_max_dimension", "image_compression_quality"]);
-const BOOLEANS = new Set<SettingField>(["autostart", "radial_menu_enabled", "clipboard_notifications"]);
+const NUMBERS = new Set<SettingField>(["dedupe_window_seconds", "max_history_items", "max_storage_mb", "image_max_dimension", "image_compression_quality", "capsule_duration_seconds"]);
+const BOOLEANS = new Set<SettingField>(["autostart", "radial_menu_enabled", "clipboard_notifications", "capsule_enabled", "capsule_url_enabled", "capsule_path_enabled"]);
 
 function snapshot(): Values {
   const settings = useSettingsStore.getState();
@@ -48,10 +51,17 @@ function validate(field: SettingField, value: string): string | null {
   }
   const bounds: Partial<Record<SettingField, [number, number]>> = {
     max_history_items: [100, 100000], max_storage_mb: [50, 100000], image_compression_quality: [40, 100],
+    capsule_duration_seconds: [3, 10],
+  };
+  const rangeErrors: Partial<Record<SettingField, string>> = {
+    max_history_items: "settings.invalidHistoryLimit",
+    max_storage_mb: "settings.invalidStorageLimit",
+    capsule_duration_seconds: "settings.invalidCapsuleDuration",
   };
   const range = bounds[field];
-  if (range && (!/^\d+$/.test(value) || Number(value) < range[0] || Number(value) > range[1])) return field === "max_history_items"
-    ? "settings.invalidHistoryLimit" : field === "max_storage_mb" ? "settings.invalidStorageLimit" : "settings.invalidNumber";
+  if (range && (!/^\d+$/.test(value) || Number(value) < range[0] || Number(value) > range[1])) {
+    return rangeErrors[field] ?? "settings.invalidNumber";
+  }
   return null;
 }
 

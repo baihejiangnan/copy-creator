@@ -1681,6 +1681,13 @@ pub(crate) const EXPORT_SETTING_KEYS: &[&str] = &[
     "large_image_handling",
     "clipboard_notifications",
     "auto_check_updates",
+    "capsule_enabled",
+    "capsule_url_enabled",
+    "capsule_path_enabled",
+    "capsule_duration_seconds",
+    "capsule_icon_url",
+    "capsule_icon_file",
+    "capsule_icon_folder",
 ];
 
 pub(crate) fn validate_import_setting(key: &str, value: &str) -> Option<String> {
@@ -1695,7 +1702,13 @@ pub(crate) fn validate_import_setting(key: &str, value: &str) -> Option<String> 
         "default_translate_engine" => matches!(value, "google" | "ai"),
         "theme" => matches!(value, "light" | "dark"),
         "language" => matches!(value, "zh-CN" | "en"),
-        "radial_menu_enabled" | "clipboard_notifications" | "auto_check_updates" => matches!(value, "0" | "1"),
+        "radial_menu_enabled" | "clipboard_notifications" | "auto_check_updates" | "capsule_enabled"
+        | "capsule_url_enabled" | "capsule_path_enabled" => matches!(value, "0" | "1"),
+        "capsule_duration_seconds" => value
+            .parse::<u64>()
+            .is_ok_and(|number| (3..=10).contains(&number)),
+        // Icon paths are arbitrary local files; they are only length checked here.
+        "capsule_icon_url" | "capsule_icon_file" | "capsule_icon_folder" => true,
         "large_image_handling" => matches!(value, "compress" | "keep" | "skip"),
         "max_history_items" => value
             .parse::<u64>()

@@ -157,6 +157,19 @@ unsafe extern "system" fn mouse_hook_callback(
     if n_code >= 0 {
         let msg = w_param.0 as u32;
 
+        // Any mouse button press outside the capsule dismisses it, mirroring a
+        // tap on the close area. The hook never swallows the click.
+        if matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN)
+            && crate::capsule::is_visible()
+        {
+            if let Some(app) = APP_HANDLE.get() {
+                let hook_struct = &*(l_param.0 as *const MSLLHOOKSTRUCT);
+                if crate::capsule::click_outside(app, hook_struct.pt.x, hook_struct.pt.y) {
+                    crate::capsule::hide(app);
+                }
+            }
+        }
+
         if msg == WM_RBUTTONDOWN {
             let ctrl = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16) & 0x8000 != 0;
             let shift = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16) & 0x8000 != 0;

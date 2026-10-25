@@ -1030,6 +1030,7 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
         let _ = crate::storage_events::emit(app,"clipboard-refresh", ());
         crate::db::increment_unread_if_hidden(app);
         maybe_show_clipboard_notification(app, record_type, content);
+        crate::capsule::maybe_show(app, record_type, content);
         crate::tray::schedule_tray_refresh(app);
         return;
     }
@@ -1109,6 +1110,7 @@ fn insert_and_emit(app: &AppHandle, record_type: &str, content: &str) {
 
     crate::db::increment_unread_if_hidden(app);
     maybe_show_clipboard_notification(app, record_type, content);
+    crate::capsule::maybe_show(app, record_type, content);
     crate::tray::schedule_tray_refresh(app);
 }
 

@@ -302,6 +302,14 @@
     "conflict": "资料已发生变化，未覆盖新内容。请保留当前草稿并重新加载后再编辑。",
     "unsavedDraft": "保险箱还有未保存的修改，请先保存或明确放弃后再继续。"
   },
+  "capsule": {
+    "openUrl": "打开网址",
+    "openFile": "打开文件",
+    "openFolder": "打开文件夹",
+    "close": "关闭",
+    "openFailed": "无法打开该链接或文件。",
+    "iconSelectFailed": "选择图片失败，请重试。"
+  },
   "settings": {
     "autoSaveHint": "更改将自动保存，输入框在填写完成后保存。",
     "autoSaving": "正在保存…",
@@ -318,6 +326,7 @@
     "invalidNumber": "请输入范围内的整数。",
     "invalidHistoryLimit": "历史数量必须是 100–100000 之间的整数。",
     "invalidStorageLimit": "存储上限必须是 50–100000 MB 之间的整数。",
+    "invalidCapsuleDuration": "停留时长需在 3 到 10 秒之间",
     "shortcutUnavailable": "此快捷键不可用，原快捷键已保留，请重新录制或重试。",
     "awaitingLimitConfirmation": "此变更会清理历史，等待确认。",
     "limitConfirmTitle": "确认清理超限历史",
@@ -411,6 +420,24 @@
     "items": "条",
     "maxStorageSize": "存储空间上限",
     "clipboardNotifications": "新剪贴板通知",
+    "capsule": {
+      "title": "链接胶囊",
+      "enabled": "启用链接胶囊",
+      "enabledHint": "复制链接或文件路径时在屏幕顶部弹出快捷胶囊",
+      "url": "识别网址链接",
+      "path": "识别文件路径",
+      "duration": "停留时长",
+      "durationUnit": "秒",
+      "icons": "胶囊图标",
+      "iconUrl": "网址图标",
+      "iconFile": "文件图标",
+      "iconFolder": "文件夹图标",
+      "iconDefault": "默认",
+      "iconChoose": "选择图片",
+      "iconReset": "恢复默认",
+      "iconCustomHint": "自定义图标会替换胶囊左侧的默认图标",
+      "iconCustom": "已自定义"
+    },
     "storageUsage": "{{count}} 条 · {{size}}",
     "favoriteCount": "收藏 {{count}} 条",
     "imageProcessing": "图片处理",
