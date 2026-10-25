@@ -85,4 +85,6 @@
 - 全屏应用与游戏上方：置顶窗口可能被系统或全屏优化遮挡，未验证。
 - 超长路径在胶囊内按单行截断显示（120 字符后省略），完整内容需通过「打开」查看。
 - 自定义图标仅支持本地图片文件（png/jpg/jpeg/gif/webp/svg/bmp，上限 512 KiB），不做压缩。
-- 磨砂效果：胶囊窗口使用 `backdrop-filter: blur(40px) saturate(180%)`，但 WebView2 在透明置顶窗口上取不到背后内容做模糊，实测计算值为 `none`，视觉上呈现为半透明填充而非真实背景模糊；如需真实模糊需改用平台级 backdrop 效果，当前版本未实现。
+- 磨砂效果：胶囊窗口使用 `backdrop-filter: blur(40px) saturate(180%)`，但 WebView2 在透明置顶窗口上取不到背后内容做模糊，实测计算值为 `none`，视觉上呈现为半透明填充而非真实背景模糊；如需真实模糊需改用平台级 backdrop 效果（评估 `window-vibrancy` 的 Win11 Acrylic/Mica，Win10 需回退），当前版本未实现，仅记录在 TODO 的 C-06。
+- 打包：本机未安装 NSIS 3.x，`bundle.targets = all` 中的 NSIS 目标在构建时被跳过，本地构建只产出 MSI 与便携 EXE；该配置保持不变，安装了 NSIS 的环境仍可产出 NSIS 安装包。
+- 更新签名：本轮产出的 MSI 与便携 EXE 均未附 `.sig`，因为自动更新私钥缺失（`src-tauri/updater.pub` 无配对私钥）。这是既有问题，不属胶囊功能引入，见 TODO 的 U 项。
