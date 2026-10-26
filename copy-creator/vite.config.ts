@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  build: { rolldownOptions: { input: { main: "index.html", radial: "radial.html" } } },
+  build: { rolldownOptions: { input: { main: "index.html", radial: "radial.html", capsule: "capsule.html" } } },
   server: {
     port: 5173,
     strictPort: true,
@@ -18,6 +18,6 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ["src-tauri"],
-    entries: ["./src/main.tsx", "./src/radial.tsx"],
+    entries: ["./src/main.tsx", "./src/radial.tsx", "./src/capsule.tsx"],
   },
 });

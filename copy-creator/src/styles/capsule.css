@@ -1,0 +1,286 @@
+/* === Link Capsule (top-of-screen quick action pill) === */
+
+:root {
+  /* WebView2 cannot read the desktop behind a transparent always-on-top
+     window, so backdrop-filter never blurs there (see docs capsule.md).
+     Keep the base near-opaque: the pill must stay readable over any
+     wallpaper or desktop icons. */
+  --capsule-bg: rgba(255, 255, 255, 0.92);
+  --capsule-bg-hover: rgba(255, 255, 255, 0.97);
+  --capsule-border: rgba(255, 255, 255, 0.62);
+  --capsule-border-hover: rgba(255, 255, 255, 0.78);
+  --capsule-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
+  --capsule-text: var(--text-primary);
+  --capsule-action-bg: rgba(0, 122, 255, 0.12);
+  --capsule-action-color: var(--accent);
+  --capsule-action-hover-bg: rgba(0, 122, 255, 0.2);
+  --capsule-close-bg: rgba(0, 0, 0, 0.06);
+  --capsule-close-color: rgba(60, 60, 67, 0.6);
+  --capsule-close-hover-bg: rgba(0, 0, 0, 0.12);
+  --capsule-close-hover-color: rgba(60, 60, 67, 0.9);
+}
+
+[data-theme="dark"] {
+  --capsule-bg: rgba(44, 44, 44, 0.9);
+  --capsule-bg-hover: rgba(54, 54, 54, 0.95);
+  --capsule-border: rgba(255, 255, 255, 0.12);
+  --capsule-border-hover: rgba(255, 255, 255, 0.2);
+  --capsule-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+  --capsule-text: var(--text-primary);
+  --capsule-action-bg: rgba(10, 132, 255, 0.22);
+  --capsule-action-color: #4DA3FF;
+  --capsule-action-hover-bg: rgba(10, 132, 255, 0.32);
+  --capsule-close-bg: rgba(255, 255, 255, 0.08);
+  --capsule-close-color: rgba(255, 255, 255, 0.6);
+  --capsule-close-hover-bg: rgba(255, 255, 255, 0.16);
+  --capsule-close-hover-color: rgba(255, 255, 255, 0.92);
+}
+
+/* The capsule window itself is a transparent, borderless overlay. */
+html,
+body,
+.capsule-body {
+  background: transparent;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+html,
+body,
+#root,
+.capsule-root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.capsule-root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 76px window = 14px room for the slide-in offset + 52px pill + 10px for the shadow. */
+  padding: 14px 12px 10px;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+}
+
+/* --- Pill --- */
+.capsule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 0 8px 0 16px;
+  border-radius: 999px;
+  background: var(--capsule-bg);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  /* The shadow stays tight on purpose: anything softer is clipped by the window. */
+  box-shadow:
+    var(--capsule-shadow),
+    0 0 0 0.5px var(--capsule-border) inset;
+  color: var(--capsule-text);
+  overflow: hidden;
+  animation: capsuleIn 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background 0.16s ease;
+}
+
+.capsule-leaving {
+  animation: capsuleOut 0.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Hovering pauses the countdown, so the pill gets a touch more presence. */
+.capsule-hovered {
+  background: var(--capsule-bg-hover);
+  box-shadow:
+    var(--capsule-shadow),
+    0 0 0 0.5px var(--capsule-border-hover) inset;
+}
+
+@keyframes capsuleIn {
+  from {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes capsuleOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+/* --- Left icon --- */
+.capsule-icon {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.capsule-icon-default {
+  /* Shipped SVGs use stroke="currentColor", which resolves to black inside an
+     <img>; opacity softens it on light and the filter inverts it on dark. */
+  opacity: 0.55;
+}
+
+[data-theme="dark"] .capsule-icon-default {
+  filter: invert(1) brightness(1.15);
+  opacity: 0.8;
+}
+
+.capsule-icon-custom {
+  border-radius: 4px;
+  opacity: 1;
+}
+
+/* --- Middle text --- */
+.capsule-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  font-weight: var(--weight-normal);
+  line-height: 1.2;
+  color: var(--capsule-text);
+}
+
+/* --- Right action --- */
+.capsule-action {
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--capsule-action-bg);
+  color: var(--capsule-action-color);
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.capsule-action:hover {
+  background: var(--capsule-action-hover-bg);
+}
+
+.capsule-action:active {
+  opacity: 0.75;
+}
+
+.capsule-action:focus-visible {
+  outline: 2px solid var(--capsule-action-color);
+  outline-offset: 2px;
+}
+
+/* --- Close button --- */
+.capsule-close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--capsule-close-bg);
+  color: var(--capsule-close-color);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.capsule-close:hover {
+  background: var(--capsule-close-hover-bg);
+  color: var(--capsule-close-hover-color);
+}
+
+.capsule-close:active {
+  opacity: 0.75;
+}
+
+.capsule-close:focus-visible {
+  outline: 2px solid var(--capsule-action-color);
+  outline-offset: 2px;
+}
+
+.capsule-close-icon {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+/* --- Drag (fixed mode) --- */
+.capsule-dragging {
+  cursor: grabbing;
+}
+
+/* --- Pill row (icon + text + actions) --- */
+/* Unconditional flex: without it the row degrades to inline flow — the text
+   stops ellipsising, the action button gets pushed out and the close button
+   wraps onto a second line (regression seen on desktop). */
+.capsule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+/* --- Expanded full text (hover bubble) --- */
+/* The pill becomes a rounded card while expanded; 999px corners would clip
+   the bubble. Overflow switches from hidden to visible so the bubble can
+   exceed the window height's pill row. */
+.capsule[data-expanded="true"] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  height: auto;
+  padding: 12px 12px 12px 16px;
+  border-radius: 18px;
+  overflow: visible;
+}
+
+/* Bubble sits over the pill's lower half inside the window; text scrolls
+   internally when it exceeds the cap, selectable, context-copyable. */
+.capsule-expand {
+  max-height: 120px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--capsule-expand-bg, rgba(255, 255, 255, 0.65));
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+[data-theme="dark"] .capsule-expand {
+  background: var(--capsule-expand-bg-dark, rgba(60, 60, 60, 0.65));
+}
+
+.capsule-expand-text {
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  word-break: break-all;
+  white-space: pre-wrap;
+  color: var(--capsule-text);
+}

@@ -1,4 +1,4 @@
-import { invokeStorage } from "../lib/storageIdentity";
+import { invokeStorage, getStorageIdentity } from "../lib/storageIdentity";
 import "../styles/settings.css";
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { ReactNode } from "react";
@@ -8,7 +8,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSettingsEditorStore } from "../stores/settingsEditorStore";
 import type { SettingField } from "../stores/settingsEditorStore";
-import { StorageSection, ClipboardSection, ImageSection, DataSection, LanguageSection,
+import { StorageSection, ClipboardSection, ImageSection, CapsuleSection, DataSection, LanguageSection,
   ShortcutSection, TranslationSection, StartupSection, RetentionSection } from "./settings";
 import type { ClipboardStorageStats } from "./settings";
 import { UpdateSection } from "./settings/UpdateSection";
@@ -83,6 +83,20 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
   const change = (field: SettingField) => (value: string) => editor.change(field, value);
   const toggle = (field: SettingField) => (enabled: boolean) => editor.change(field, enabled ? "1" : "0");
   const commit = (field: SettingField) => { void editor.commit(field); };
+  const selectCapsuleIcon = async (kind: "url" | "file" | "folder") => {
+    const epoch = await getStorageIdentity();
+    const selected = await invokeStorage<string | null>("select_capsule_icon", { kind }, epoch).catch((error: unknown) => {
+      console.error("Failed to select capsule icon:", error);
+      return null;
+    });
+    if (selected) await editor.initialize(true);
+  };
+  const resetCapsuleIcon = async (kind: "url" | "file" | "folder") => {
+    const epoch = await getStorageIdentity();
+    await invokeStorage("reset_capsule_icon", { kind }, epoch)
+      .then(() => editor.initialize(true))
+      .catch((error: unknown) => { console.error("Failed to reset capsule icon:", error); });
+  };
   const handleImported = async () => {
     const previousShortcut = settings.shortcutKey;
     await settings.loadSettings();
@@ -126,6 +140,34 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
         setCompressionQuality={(value) => editor.edit("image_compression_quality", String(value))}
         onCommitCompression={(value) => void editor.commit("image_compression_quality", String(value))}
         largeImageHandling={values.large_image_handling} setLargeImageHandling={change("large_image_handling")} />
+      <CapsuleSection enabled={values.capsule_enabled === "1"} setEnabled={toggle("capsule_enabled")}
+        urlEnabled={values.capsule_url_enabled === "1"} setUrlEnabled={toggle("capsule_url_enabled")}
+        pathEnabled={values.capsule_path_enabled === "1"} setPathEnabled={toggle("capsule_path_enabled")}
+        durationSeconds={Number(values.capsule_duration_seconds)}
+        setDurationSeconds={(value) => editor.edit("capsule_duration_seconds", value)}
+        onCommitDuration={() => void editor.commit("capsule_duration_seconds")}
+        durationError={editor.errors.capsule_duration_seconds}
+        positionMode={values.capsule_position_mode || "top"}
+        setPositionMode={(value) => editor.change("capsule_position_mode", value)}
+        triggerMode={values.capsule_trigger_mode || "always"}
+        setTriggerMode={(value) => editor.change("capsule_trigger_mode", value)}
+        modifierKey={values.capsule_modifier_key || "ctrl"}
+        setModifierKey={(value) => editor.change("capsule_modifier_key", value)}
+        blacklist={(values.capsule_blacklist || "").split(",").map((entry) => entry.trim()).filter(Boolean)}
+        setBlacklist={(entries) => editor.change("capsule_blacklist", entries.join(","))}
+        fullscreenEnabled={values.capsule_fullscreen_enabled !== "0"}
+        setFullscreenEnabled={toggle("capsule_fullscreen_enabled")}
+        onAddForegroundApp={async () => {
+          try { return await invoke<string | null>("capsule_last_copy_source"); }
+          catch { return null; }
+        }}
+        onResetFixedPosition={() => {
+          void editor.change("capsule_position_mode", "top");
+          void invoke("capsule_reset_fixed_position").catch(console.error);
+        }}
+        iconUrl={values.capsule_icon_url} iconFile={values.capsule_icon_file} iconFolder={values.capsule_icon_folder}
+        onSelectIcon={(kind) => void selectCapsuleIcon(kind)} onResetIcon={(kind) => void resetCapsuleIcon(kind)}
+        onCommit={commit} errors={editor.errors} />
     </>,
     translation: <TranslationSection localEngine={values.default_translate_engine} setLocalEngine={change("default_translate_engine")}
       localApiUrl={values.ai_api_url} setLocalApiUrl={(value) => editor.edit("ai_api_url", value)}

@@ -111,6 +111,14 @@ Copy Creator 是以 Windows 桌面为主要运行环境的本地效率工具，�
 | 前端生产构建 | `pnpm build` |
 | Rust 单元测试 | `cargo test --manifest-path src-tauri/Cargo.toml` |
 | 正式桌面构建 | `pnpm exec tauri build` |
+| 本机开发构建（Windows） | `scripts/build-windows-local.ps1`（等价链路，见下） |
+
+本机构建分两条路径，不要混用：
+
+- **CI 与常规环境**：用 `pnpm exec tauri build`。这是规范入口，也是发行流程依据。
+- **本机开发（当前工作机）**：用 `scripts/build-windows-local.ps1`。本机环境有三层限制导致 CLI 直调不可用：① `pnpm` 生成的 `node_modules` junction 不被 Node ESM 解析器跟随，`pnpm lint`/`pnpm build` 会报 `ERR_MODULE_NOT_FOUND`；② 环境注入的 `NODE_OPTIONS` 删除保护 shim 会拦截 vite 清理 `dist`；③ 沙箱禁止带管道 stdio 的子进程，`pnpm test:unit` 的子进程会报 `spawn EPERM`。脚本按 `tsc -b` → `vite build` → `tauri build --ci --bundles msi -- --locked` 的顺序逐段执行，并预设 `CARGO_HOME`/`RUSTUP_HOME`、可写的 `TEMP`/`TMP`、清除 `NODE_OPTIONS`。
+
+本机环境事实：无 MSVC 工具链，改用 MinGW-w64（winlibs）+ `stable-x86_64-pc-windows-gnu`，离线 vendor 依赖。2026-10-25 已用 `scripts/build-windows-local.ps1` 在仓库内完整跑通官方链路，`cdylib`/`staticlib`/rlib 与 `copy-creator.exe` 均链接成功（产出 `app_lib.dll` 67.50 MB、`libapp_lib.a`、`libapp_lib.rlib`），随之产出 MSI。此前记录的「MinGW 下 `cdylib` 超过 PE 导出表 65535 上限无法链接、须在仓库外用 `rlib` 副本构建」只适用于当时那套带自定义 `RUSTFLAGS` 链接器参数的尝试，**不是这条构建路径的限制**，脚本路径下不再需要该绕过步骤。构建日志会出现 `ld.exe: .rsrc merge failure: multiple non-default manifests` 与 `copy-creator (bin) generated 1 warning`：这是 MinGW 默认 manifest 与 tauri-build 资源 manifest 冲突导致的环境警告，代码 0 error、与本次改动无关，MSVC 环境不会出现。本机未安装 NSIS 3.x，`bundle.targets = all` 中的 NSIS 目标在构建时被跳过，只产出 MSI。cargo 全局 `build.target-dir` 已重定向，产物在 `D:\dshwork\env\target\release\`，**不在** `src-tauri\target`；`scripts/release-windows.ps1` 写死的路径与此不一致，发行时以实际产物路径为准。
 
 按改动范围执行必要检查。纯文档修改检查链接、导航、事实和 `git diff --check` 即可。涉及系统快捷键、剪贴板/粘贴、原生文件操作、窗口焦点或生命周期时，还需隔离桌面验证；未执行的项目明确标为待验证。性能结论需来自对应 Release 产物和参考环境。
 
