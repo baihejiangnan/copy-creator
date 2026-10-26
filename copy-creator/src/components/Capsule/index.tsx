@@ -39,6 +39,7 @@ export default function Capsule() {
   // flag distinguishes a real drag from a click on release.
   const pointerDownRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const draggedRef = useRef(false);
+  const expandedRef = useRef(false);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -62,6 +63,7 @@ export default function Capsule() {
     leavingRef.current = false;
     pointerDownRef.current = null;
     draggedRef.current = false;
+    expandedRef.current = false;
     setVisible(false);
     setLeaving(false);
     setHovered(false);
@@ -127,6 +129,14 @@ export default function Capsule() {
       });
   }, []);
 
+  // The webview cannot grow past its own window; Rust resizes the native window
+  // from the same anchor before the bubble is painted.
+  const setExpandedState = useCallback((next: boolean) => {
+    expandedRef.current = next;
+    setExpanded(next);
+    void invoke("capsule_set_expanded", { expanded: next }).catch(() => {});
+  }, []);
+
   // Initial theme and language, then follow the main window for both.
   useEffect(() => {
     invoke<string>("get_setting", { key: "theme" }).then((theme) => {
@@ -162,7 +172,7 @@ export default function Capsule() {
       setKind(payload.kind);
       setText(payload.text);
       setDisplay(payload.display);
-      setHovered(false);
+      expandedRef.current = false;
       setExpanded(false);
       setLeaving(false);
       leavingRef.current = false;
@@ -214,14 +224,14 @@ export default function Capsule() {
 
   const handleMouseLeave = useCallback(() => {
     setHovered(false);
-    setExpanded(false);
+    if (expandedRef.current) setExpandedState(false);
     if (!visibleRef.current || leavingRef.current) return;
     // Resume from the remaining time instead of restarting the full duration.
     const remaining = remainingRef.current;
     remainingRef.current = 0;
     if (remaining > 0) startCountdown(remaining);
     else beginFadeOut();
-  }, [beginFadeOut, startCountdown]);
+  }, [beginFadeOut, setExpandedState, startCountdown]);
 
   const handleOpen = useCallback(() => {
     // Rust hides the capsule itself on success and also when the open fails, so a
@@ -298,7 +308,7 @@ export default function Capsule() {
           <span
             className="capsule-text"
             title={display || text}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => setExpandedState(!expandedRef.current)}
           >{display || text}</span>
           <button type="button" className="capsule-action" onClick={handleOpen}>
             {t(OPEN_LABEL_KEYS[kind])}

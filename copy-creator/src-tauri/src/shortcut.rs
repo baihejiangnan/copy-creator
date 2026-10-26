@@ -269,6 +269,30 @@ unsafe extern "system" fn mouse_hook_callback(
     unsafe { CallNextHookEx(hook, n_code, w_param, l_param) }
 }
 
+// The capsule window is non-activating, so key presses keep going to the
+// previous foreground app. A low-level hook is the only way to see Esc without
+// stealing focus; it observes the key and never swallows it.
+#[cfg(target_os = "windows")]
+static KEYBOARD_HOOK_HANDLE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn keyboard_hook_callback(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0
+        && matches!(w_param.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN)
+        && (*((l_param.0 as *const KBDLLHOOKSTRUCT))).vkCode == VK_ESCAPE.0 as u32
+        && crate::capsule::is_visible()
+    {
+        if let Some(app) = APP_HANDLE.get() {
+            crate::capsule::hide(app);
+        }
+    }
+    let hook = HHOOK(KEYBOARD_HOOK_HANDLE.load(Ordering::SeqCst));
+    unsafe { CallNextHookEx(hook, n_code, w_param, l_param) }
+}
 pub fn install_mouse_hook(app: &AppHandle) {
     #[cfg(target_os = "windows")]
     {
@@ -286,6 +310,13 @@ pub fn install_mouse_hook(app: &AppHandle) {
             log::info!("Global mouse hook installed (Ctrl+Shift+RightClick / Ctrl+Alt+RightClick)");
         } else {
             log::warn!("Failed to install mouse hook");
+        }
+        match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_callback), None, 0) } {
+            Ok(h) => {
+                KEYBOARD_HOOK_HANDLE.store(h.0, Ordering::SeqCst);
+                log::info!("Global keyboard hook installed (capsule Esc)");
+            }
+            Err(_) => log::warn!("Failed to install keyboard hook"),
         }
     }
 }
