@@ -111,7 +111,8 @@
 - 修饰键门控依赖「复制发生时按键仍按住」：剪贴板监听为事件驱动，若系统繁忙导致处理延迟超过按键时长，极短按键可能不触发弹出；正常人工复制（按住时间 >100ms）不受影响。
 - 超长路径在胶囊内按单行截断显示（120 字符后省略），可点击文本区展开查看全文（二期）。
 - 自定义图标仅支持本地图片文件（png/jpg/jpeg/gif/webp/svg/bmp，上限 512 KiB），不做压缩。
-- 磨砂效果：胶囊窗口使用 `backdrop-filter: blur(40px) saturate(180%)`，但 WebView2 在透明置顶窗口上取不到背后内容做模糊，实测计算值为 `none`，视觉上呈现为半透明填充而非真实背景模糊；如需真实模糊需改用平台级 backdrop 效果（评估 `window-vibrancy` 的 Win11 Acrylic/Mica，Win10 需回退），当前版本未实现，仅记录在 TODO 的 C-06。
+- 磨砂效果：胶囊窗口使用 `backdrop-filter: blur(40px) saturate(180%)`，但 WebView2 在透明置顶窗口上取不到背后内容做模糊，实测计算值为 `none`。因此胶囊底色采用近实底方案保证任意壁纸下的可读性（亮色 `rgba(255,255,255,0.92)`、暗色 `rgba(44,44,44,0.9)`，悬停时加深）；`backdrop-filter` 声明保留，在支持的引擎上仍会叠加模糊。如需真实模糊需改用平台级 backdrop 效果（评估 `window-vibrancy` 的 Win11 Acrylic/Mica，Win10 需回退），当前版本未实现，仅记录在 TODO 的 C-06。
+- 布局回归说明：胶囊内容行 `.capsule-row` 的 flex 规则必须无条件生效；早期版本该规则只写在展开态选择器下，导致普通态退化为 inline 流（文本不省略、关闭按钮折行）。已于二期后修复并经亮/暗主题、长路径省略、展开态、连续 10 次快速复制（单实例不堆叠）与一期识别矩阵 11/11 回归验证。
 - 运行时依赖：WebView2 **Evergreen 运行时**（浏览器本体）不随包，启动时加载系统安装的版本，目标机需已装 WebView2 Runtime（Win11 自带，Win10 多数已有）；但 `WebView2Loader.dll`（约 160 KB 的加载器）是 exe 的静态导入依赖，**必须与 exe 同目录**，缺失时进程无法启动（`STATUS_DLL_NOT_FOUND`）。便携分发时两者缺一不可，MSI 安装包则不受影响。
 - 打包：本机未安装 NSIS 3.x，`bundle.targets = all` 中的 NSIS 目标在构建时被跳过，本地构建只产出 MSI 与便携 EXE；该配置保持不变，安装了 NSIS 的环境仍可产出 NSIS 安装包。
 - 更新签名：本轮产出的 MSI 与便携 EXE 均未附 `.sig`，因为自动更新私钥缺失（`src-tauri/updater.pub` 无配对私钥）。这是既有问题，不属胶囊功能引入，见 TODO 的 U 项。

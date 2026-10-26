@@ -1,8 +1,12 @@
 /* === Link Capsule (top-of-screen quick action pill) === */
 
 :root {
-  --capsule-bg: rgba(255, 255, 255, 0.55);
-  --capsule-bg-hover: rgba(255, 255, 255, 0.68);
+  /* WebView2 cannot read the desktop behind a transparent always-on-top
+     window, so backdrop-filter never blurs there (see docs capsule.md).
+     Keep the base near-opaque: the pill must stay readable over any
+     wallpaper or desktop icons. */
+  --capsule-bg: rgba(255, 255, 255, 0.92);
+  --capsule-bg-hover: rgba(255, 255, 255, 0.97);
   --capsule-border: rgba(255, 255, 255, 0.62);
   --capsule-border-hover: rgba(255, 255, 255, 0.78);
   --capsule-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
@@ -17,8 +21,8 @@
 }
 
 [data-theme="dark"] {
-  --capsule-bg: rgba(40, 40, 40, 0.55);
-  --capsule-bg-hover: rgba(52, 52, 52, 0.68);
+  --capsule-bg: rgba(44, 44, 44, 0.9);
+  --capsule-bg-hover: rgba(54, 54, 54, 0.95);
   --capsule-border: rgba(255, 255, 255, 0.12);
   --capsule-border-hover: rgba(255, 255, 255, 0.2);
   --capsule-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
@@ -230,6 +234,18 @@ body,
   cursor: grabbing;
 }
 
+/* --- Pill row (icon + text + actions) --- */
+/* Unconditional flex: without it the row degrades to inline flow — the text
+   stops ellipsising, the action button gets pushed out and the close button
+   wraps onto a second line (regression seen on desktop). */
+.capsule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
 /* --- Expanded full text (hover bubble) --- */
 /* The pill becomes a rounded card while expanded; 999px corners would clip
    the bubble. Overflow switches from hidden to visible so the bubble can
@@ -242,13 +258,6 @@ body,
   padding: 12px 12px 12px 16px;
   border-radius: 18px;
   overflow: visible;
-}
-
-.capsule[data-expanded="true"] .capsule-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
 }
 
 /* Bubble sits over the pill's lower half inside the window; text scrolls
