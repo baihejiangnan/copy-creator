@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { SettingField } from "../../stores/settingsEditorStore";
 import SettingsFieldError from "../SettingsFieldError";
+import IosSelect from "../IosSelect";
 
 type CapsuleIconKind = "url" | "file" | "folder";
 
@@ -15,6 +17,18 @@ interface CapsuleSectionProps {
   setDurationSeconds: (value: string) => void;
   onCommitDuration: () => void;
   durationError?: string;
+  positionMode: string;
+  setPositionMode: (value: string) => void;
+  triggerMode: string;
+  setTriggerMode: (value: string) => void;
+  modifierKey: string;
+  setModifierKey: (value: string) => void;
+  blacklist: string[];
+  setBlacklist: (value: string[]) => void;
+  fullscreenEnabled: boolean;
+  setFullscreenEnabled: (value: boolean) => void;
+  onAddForegroundApp: () => Promise<string | null>;
+  onResetFixedPosition: () => void;
   iconUrl: string;
   iconFile: string;
   iconFolder: string;
@@ -42,6 +56,18 @@ export function CapsuleSection({
   setDurationSeconds,
   onCommitDuration,
   durationError,
+  positionMode,
+  setPositionMode,
+  triggerMode,
+  setTriggerMode,
+  modifierKey,
+  setModifierKey,
+  blacklist,
+  setBlacklist,
+  fullscreenEnabled,
+  setFullscreenEnabled,
+  onAddForegroundApp,
+  onResetFixedPosition,
   iconUrl,
   iconFile,
   iconFolder,
@@ -50,6 +76,8 @@ export function CapsuleSection({
   errors,
 }: CapsuleSectionProps) {
   const { t } = useTranslation();
+  const [blacklistInput, setBlacklistInput] = useState("");
+  const [blacklistError, setBlacklistError] = useState<string | null>(null);
   const error = durationError ?? errors.capsule_duration_seconds;
   // Dependent rows stay visible but grey out while the master switch is off.
   const dim = enabled ? undefined : { opacity: 0.55 };
@@ -58,6 +86,27 @@ export function CapsuleSection({
     { kind: "file", label: t("settings.capsule.iconFile"), path: iconFile },
     { kind: "folder", label: t("settings.capsule.iconFolder"), path: iconFolder },
   ];
+
+  const addBlacklistEntry = (raw: string) => {
+    const name = raw.trim().toLowerCase();
+    if (!name) return;
+    if (blacklist.some((entry) => entry === name || entry.replace(/\.exe$/, "") === name.replace(/\.exe$/, ""))) {
+      setBlacklistError(t("settings.capsule.blacklistDuplicate"));
+      return;
+    }
+    setBlacklist([...blacklist, name]);
+    setBlacklistError(null);
+    setBlacklistInput("");
+  };
+
+  const handleAddForeground = async () => {
+    const name = await onAddForegroundApp();
+    if (!name) {
+      setBlacklistError(t("settings.capsule.blacklistNoForeground"));
+      return;
+    }
+    addBlacklistEntry(name);
+  };
 
   return (
     <>
@@ -125,6 +174,117 @@ export function CapsuleSection({
             </div>
           </div>
           <SettingsFieldError field="capsule_duration_seconds" error={enabled ? error : undefined} />
+          <div className="settings-row" style={dim}>
+            <div className="settings-row-label">{t("settings.capsule.position")}</div>
+            <IosSelect
+              value={positionMode}
+              onChange={(value) => setPositionMode(value)}
+              options={[
+                { value: "top", label: t("settings.capsule.positionTop") },
+                { value: "bottom", label: t("settings.capsule.positionBottom") },
+                { value: "cursor", label: t("settings.capsule.positionCursor") },
+                { value: "fixed", label: t("settings.capsule.positionFixed") },
+              ]}
+            />
+          </div>
+          <div className="settings-row vertical" style={dim}>
+            <div className="settings-row-hint">{t("settings.capsule.positionHint")}</div>
+          </div>
+          {positionMode === "fixed" && (
+            <div className="settings-row" style={dim}>
+              <div className="settings-row-label">{t("settings.capsule.resetPosition")}</div>
+              <button
+                className="settings-transfer-btn" type="button" disabled={!enabled}
+                onClick={onResetFixedPosition}
+              >{t("settings.capsule.resetPositionAction")}</button>
+            </div>
+          )}
+          <div className="settings-row" style={dim}>
+            <div className="settings-row-label">{t("settings.capsule.trigger")}</div>
+            <IosSelect
+              value={triggerMode}
+              onChange={(value) => setTriggerMode(value)}
+              options={[
+                { value: "always", label: t("settings.capsule.triggerAlways") },
+                { value: "modifier", label: t("settings.capsule.triggerModifier") },
+              ]}
+            />
+          </div>
+          {triggerMode === "modifier" && (
+            <div className="settings-row" style={dim}>
+              <div className="settings-row-label">{t("settings.capsule.modifierKey")}</div>
+              <IosSelect
+                value={modifierKey}
+                onChange={(value) => setModifierKey(value)}
+                options={[
+                  { value: "ctrl", label: t("settings.capsule.modifierCtrl") },
+                  { value: "alt", label: t("settings.capsule.modifierAlt") },
+                  { value: "shift", label: t("settings.capsule.modifierShift") },
+                ]}
+              />
+            </div>
+          )}
+          <div className="settings-row" style={dim}>
+            <div className="settings-row-label">{t("settings.capsule.fullscreenSkip")}</div>
+            <button
+              className={`toggle-switch ${fullscreenEnabled ? "on" : "off"}`}
+              role="switch" aria-checked={fullscreenEnabled} aria-label={t("settings.capsule.fullscreenSkip")}
+              onClick={() => setFullscreenEnabled(!fullscreenEnabled)}
+              type="button" disabled={!enabled}
+              title={fullscreenEnabled ? t("common.on") : t("common.off")}
+            >
+              <span className="toggle-thumb" />
+            </button>
+          </div>
+          <div className="settings-row vertical" style={dim}>
+            <div className="settings-row-hint">{t("settings.capsule.fullscreenHint")}</div>
+          </div>
+        </div>
+      </div>
+      <div className="settings-section">
+        <div className="settings-section-title">{t("settings.capsule.blacklistTitle")}</div>
+        <div className="settings-card">
+          <div className="settings-row vertical" style={dim}>
+            <div className="settings-row-label">{t("settings.capsule.blacklistLabel")}</div>
+            <div className="settings-number-control">
+              <input
+                className="settings-number-input settings-blacklist-input"
+                type="text"
+                value={blacklistInput}
+                placeholder={t("settings.capsule.blacklistPlaceholder")}
+                onChange={(event) => { setBlacklistInput(event.target.value); setBlacklistError(null); }}
+                onKeyDown={(event) => { if (event.key === "Enter") addBlacklistEntry(blacklistInput); }}
+                disabled={!enabled}
+                maxLength={120}
+                aria-label={t("settings.capsule.blacklistLabel")}
+              />
+              <button
+                className="settings-transfer-btn" type="button" disabled={!enabled || !blacklistInput.trim()}
+                onClick={() => addBlacklistEntry(blacklistInput)}
+              >{t("settings.capsule.blacklistAdd")}</button>
+              <button
+                className="settings-transfer-btn" type="button" disabled={!enabled}
+                onClick={() => void handleAddForeground()}
+              >{t("settings.capsule.blacklistAddForeground")}</button>
+            </div>
+            {blacklist.length > 0 && (
+              <div className="capsule-blacklist-tags">
+                {blacklist.map((entry) => (
+                  <span className="capsule-blacklist-tag" key={entry}>
+                    {entry}
+                    <button
+                      type="button"
+                      aria-label={`${t("settings.capsule.blacklistRemove")} ${entry}`}
+                      disabled={!enabled}
+                      onClick={() => setBlacklist(blacklist.filter((item) => item !== entry))}
+                    >×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {blacklistError && <div className="settings-row-hint settings-field-error">{blacklistError}</div>}
+            <div className="settings-row-hint">{t("settings.capsule.blacklistHint")}</div>
+          </div>
         </div>
       </div>
       <div className="settings-section">

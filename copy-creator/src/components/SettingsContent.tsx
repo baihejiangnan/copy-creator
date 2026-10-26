@@ -147,6 +147,24 @@ export default function SettingsContent({ embedded }: { embedded?: boolean }) {
         setDurationSeconds={(value) => editor.edit("capsule_duration_seconds", value)}
         onCommitDuration={() => void editor.commit("capsule_duration_seconds")}
         durationError={editor.errors.capsule_duration_seconds}
+        positionMode={values.capsule_position_mode || "top"}
+        setPositionMode={(value) => editor.change("capsule_position_mode", value)}
+        triggerMode={values.capsule_trigger_mode || "always"}
+        setTriggerMode={(value) => editor.change("capsule_trigger_mode", value)}
+        modifierKey={values.capsule_modifier_key || "ctrl"}
+        setModifierKey={(value) => editor.change("capsule_modifier_key", value)}
+        blacklist={(values.capsule_blacklist || "").split(",").map((entry) => entry.trim()).filter(Boolean)}
+        setBlacklist={(entries) => editor.change("capsule_blacklist", entries.join(","))}
+        fullscreenEnabled={values.capsule_fullscreen_enabled !== "0"}
+        setFullscreenEnabled={toggle("capsule_fullscreen_enabled")}
+        onAddForegroundApp={async () => {
+          try { return await invoke<string | null>("capsule_last_copy_source"); }
+          catch { return null; }
+        }}
+        onResetFixedPosition={() => {
+          void editor.change("capsule_position_mode", "top");
+          void invoke("capsule_reset_fixed_position").catch(console.error);
+        }}
         iconUrl={values.capsule_icon_url} iconFile={values.capsule_icon_file} iconFolder={values.capsule_icon_folder}
         onSelectIcon={(kind) => void selectCapsuleIcon(kind)} onResetIcon={(kind) => void resetCapsuleIcon(kind)}
         onCommit={commit} errors={editor.errors} />

@@ -17,13 +17,16 @@ const FIELD_PROPS = {
   capsule_enabled: "capsuleEnabled", capsule_url_enabled: "capsuleUrlEnabled", capsule_path_enabled: "capsulePathEnabled",
   capsule_duration_seconds: "capsuleDurationSeconds", capsule_icon_url: "capsuleIconUrl",
   capsule_icon_file: "capsuleIconFile", capsule_icon_folder: "capsuleIconFolder",
+  capsule_position_mode: "capsulePositionMode", capsule_trigger_mode: "capsuleTriggerMode",
+  capsule_modifier_key: "capsuleModifierKey", capsule_blacklist: "capsuleBlacklist",
+  capsule_fullscreen_enabled: "capsuleFullscreenEnabled",
 } as const;
 export type SettingField = keyof typeof FIELD_PROPS;
 type Values = Record<SettingField, string>;
 const FIELDS = Object.keys(FIELD_PROPS) as SettingField[];
 const SECRETS = new Set<SettingField>(["ai_api_key", "google_api_key"]);
 const NUMBERS = new Set<SettingField>(["dedupe_window_seconds", "max_history_items", "max_storage_mb", "image_max_dimension", "image_compression_quality", "capsule_duration_seconds"]);
-const BOOLEANS = new Set<SettingField>(["autostart", "radial_menu_enabled", "clipboard_notifications", "capsule_enabled", "capsule_url_enabled", "capsule_path_enabled"]);
+const BOOLEANS = new Set<SettingField>(["autostart", "radial_menu_enabled", "clipboard_notifications", "capsule_enabled", "capsule_url_enabled", "capsule_path_enabled", "capsule_fullscreen_enabled"]);
 
 function snapshot(): Values {
   const settings = useSettingsStore.getState();

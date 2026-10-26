@@ -39,6 +39,11 @@ interface SettingsState {
   capsuleIconUrl: string;
   capsuleIconFile: string;
   capsuleIconFolder: string;
+  capsulePositionMode: string;
+  capsuleTriggerMode: string;
+  capsuleModifierKey: string;
+  capsuleBlacklist: string;
+  capsuleFullscreenEnabled: boolean;
 
   toggleTheme: () => void;
   loadSettings: () => Promise<void>;
@@ -79,6 +84,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   capsuleIconUrl: "",
   capsuleIconFile: "",
   capsuleIconFolder: "",
+  capsulePositionMode: "top",
+  capsuleTriggerMode: "always",
+  capsuleModifierKey: "ctrl",
+  capsuleBlacklist: "",
+  capsuleFullscreenEnabled: true,
 
   toggleTheme: () => {
     const next = get().themeMode === "light" ? "dark" : "light";
@@ -128,6 +138,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         capsuleIconUrl: settings.capsule_icon_url || "",
         capsuleIconFile: settings.capsule_icon_file || "",
         capsuleIconFolder: settings.capsule_icon_folder || "",
+        capsulePositionMode: settings.capsule_position_mode || "top",
+        capsuleTriggerMode: settings.capsule_trigger_mode || "always",
+        capsuleModifierKey: settings.capsule_modifier_key || "ctrl",
+        capsuleBlacklist: settings.capsule_blacklist || "",
+        capsuleFullscreenEnabled: settings.capsule_fullscreen_enabled !== "0",
       });
 
       // Read autostart state from the OS (plugin)

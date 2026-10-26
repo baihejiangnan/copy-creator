@@ -1688,6 +1688,13 @@ pub(crate) const EXPORT_SETTING_KEYS: &[&str] = &[
     "capsule_icon_url",
     "capsule_icon_file",
     "capsule_icon_folder",
+    "capsule_position_mode",
+    "capsule_fixed_x",
+    "capsule_fixed_y",
+    "capsule_trigger_mode",
+    "capsule_modifier_key",
+    "capsule_blacklist",
+    "capsule_fullscreen_enabled",
 ];
 
 pub(crate) fn validate_import_setting(key: &str, value: &str) -> Option<String> {
@@ -1707,8 +1714,16 @@ pub(crate) fn validate_import_setting(key: &str, value: &str) -> Option<String> 
         "capsule_duration_seconds" => value
             .parse::<u64>()
             .is_ok_and(|number| (3..=10).contains(&number)),
+        "capsule_position_mode" => matches!(value, "top" | "bottom" | "cursor" | "fixed"),
+        "capsule_trigger_mode" => matches!(value, "always" | "modifier"),
+        "capsule_modifier_key" => matches!(value, "ctrl" | "alt" | "shift"),
+        "capsule_fullscreen_enabled" => matches!(value, "0" | "1"),
+        // Fixed capsule coordinates are physical pixels; anything numeric passes.
+        "capsule_fixed_x" | "capsule_fixed_y" => value.is_empty() || value.parse::<i64>().is_ok(),
         // Icon paths are arbitrary local files; they are only length checked here.
         "capsule_icon_url" | "capsule_icon_file" | "capsule_icon_folder" => true,
+        // Process-name blacklist: free-form list, only a length bound applies.
+        "capsule_blacklist" => true,
         "large_image_handling" => matches!(value, "compress" | "keep" | "skip"),
         "max_history_items" => value
             .parse::<u64>()
@@ -1861,6 +1876,7 @@ pub fn set_setting(app: AppHandle, key: String, value: String, expected_storage_
     if key == "vault_auto_lock" {
         crate::vault::refresh_auto_lock(&app)?;
     }
+    crate::capsule::notify_setting_changed(&key);
     Ok(())
 }
 
@@ -1918,6 +1934,9 @@ pub fn set_settings_batch(
     }
     if settings.contains_key("vault_auto_lock") {
         crate::vault::refresh_auto_lock(&app)?;
+    }
+    for key in settings.keys() {
+        crate::capsule::notify_setting_changed(key);
     }
     Ok(())
 }

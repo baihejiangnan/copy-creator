@@ -17,10 +17,26 @@ const MIN_DURATION_SECONDS: u64 = 3;
 const MAX_DURATION_SECONDS: u64 = 10;
 const MAX_ICON_BYTES: u64 = 512 * 1024;
 const ICON_EXTENSIONS: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
+// Cursor mode offsets the capsule below/right of the pointer so it never sits
+// exactly under the cursor or intercepts the click that follows a copy.
+const CURSOR_OFFSET_X: f64 = 16.0;
+const CURSOR_OFFSET_Y: f64 = 16.0;
+// Edge clamp keeps the pill fully on-screen in every position mode.
+const EDGE_MARGIN: f64 = 8.0;
+// Blacklist cache TTL: settings writes invalidate eagerly, this only bounds a
+// stale cache if a setting changed through a path that skipped the hook.
+const BLACKLIST_TTL: Duration = Duration::from_secs(30);
 
 static VISIBLE: AtomicBool = AtomicBool::new(false);
 // Re-copying the same target inside this window must not re-open the capsule.
 static LAST_SHOWN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+// Cached lowercase process blacklist; the u64 generation bumps on writes.
+static BLACKLIST: Mutex<Option<(u64, Vec<String>, Instant)>> = Mutex::new(None);
+static BLACKLIST_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Process that owned the foreground at the moment of the last clipboard event.
+// The settings page reads it for the "add current foreground app" shortcut,
+// because while settings are open the foreground window is Copy Creator itself.
+static LAST_COPY_SOURCE: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -77,6 +93,83 @@ fn duration_seconds(app: &AppHandle) -> u64 {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| (MIN_DURATION_SECONDS..=MAX_DURATION_SECONDS).contains(value))
         .unwrap_or(DEFAULT_DURATION_SECONDS)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PositionMode {
+    Top,
+    Bottom,
+    Cursor,
+    Fixed,
+}
+
+fn position_mode(app: &AppHandle) -> PositionMode {
+    match crate::db::get_setting_sync(app, "capsule_position_mode").as_deref() {
+        Some("bottom") => PositionMode::Bottom,
+        Some("cursor") => PositionMode::Cursor,
+        Some("fixed") => PositionMode::Fixed,
+        _ => PositionMode::Top,
+    }
+}
+
+fn fixed_position(app: &AppHandle) -> Option<(i32, i32)> {
+    let x = crate::db::get_setting_sync(app, "capsule_fixed_x")?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
+    let y = crate::db::get_setting_sync(app, "capsule_fixed_y")?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
+    Some((x, y))
+}
+
+fn trigger_mode_is_modifier(app: &AppHandle) -> Option<&'static str> {
+    if crate::db::get_setting_sync(app, "capsule_trigger_mode").as_deref() != Some("modifier") {
+        return None;
+    }
+    let key = crate::db::get_setting_sync(app, "capsule_modifier_key").unwrap_or_default();
+    let key = key.trim().to_ascii_lowercase();
+    match key.as_str() {
+        "alt" => Some("alt"),
+        "shift" => Some("shift"),
+        _ => Some("ctrl"),
+    }
+}
+
+fn parse_blacklist(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.trim_start_matches('*').to_ascii_lowercase())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+// The blacklist lives in memory between copies; copies never touch the
+// database. Writes bump a generation so a stale cache is dropped immediately.
+fn blacklist(app: &AppHandle) -> Vec<String> {
+    let generation = BLACKLIST_GENERATION.load(Ordering::SeqCst);
+    if let Ok(guard) = BLACKLIST.lock() {
+        if let Some((cached_generation, entries, at)) = guard.as_ref() {
+            if *cached_generation == generation && at.elapsed() < BLACKLIST_TTL {
+                return entries.clone();
+            }
+        }
+    }
+    let entries = crate::db::get_setting_sync(app, "capsule_blacklist")
+        .map(|raw| parse_blacklist(&raw))
+        .unwrap_or_default();
+    if let Ok(mut guard) = BLACKLIST.lock() {
+        *guard = Some((generation, entries.clone(), Instant::now()));
+    }
+    entries
+}
+
+pub(crate) fn notify_setting_changed(key: &str) {
+    if key == "capsule_blacklist" {
+        BLACKLIST_GENERATION.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 // Explorer's "Copy as path" wraps the value in double quotes, so unwrap once up
@@ -147,9 +240,6 @@ fn detect(app: &AppHandle, text: &str) -> Option<CapsuleKind> {
     {
         return None;
     }
-    if !setting_flag(app, "capsule_enabled") {
-        return None;
-    }
     if setting_flag(app, "capsule_url_enabled") {
         if let Some(kind) = detect_url(trimmed) {
             return Some(kind);
@@ -206,13 +296,158 @@ pub(crate) fn ensure_no_activate(window: &WebviewWindow) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn modifier_held(wanted: &str) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT,
+    };
+    let virtual_key = match wanted {
+        "alt" => VK_MENU,
+        "shift" => VK_SHIFT,
+        _ => VK_CONTROL,
+    };
+    // The high bit of the 16-bit return signals the key is down. GetAsyncKeyState
+    // (not GetKeyState) is required here: the clipboard monitor thread never pumps
+    // messages, so GetKeyState would keep reporting the state as of that thread's
+    // last message lookup and miss modifier presses.
+    unsafe { GetAsyncKeyState(virtual_key.0 as i32) < 0 }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn modifier_held(_wanted: &str) -> bool {
+    false
+}
+
+// Foreground process name for the blacklist. On any failure the caller lets the
+// capsule through: a detection miss must not suppress legitimate copies.
+#[cfg(target_os = "windows")]
+fn foreground_process_name() -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::ProcessStatus::{GetModuleBaseNameW, K32GetModuleFileNameExW};
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return None;
+        }
+        let mut pid = 0u32;
+        // GetWindowThreadProcessId lives in WindowsAndMessaging but takes a
+        // mut pointer for the id out-param.
+        windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 260];
+        // Prefer the base name: it is what users recognise (e.g. "chrome.exe").
+        let length = GetModuleBaseNameW(handle, None, &mut buffer);
+        let name = if length > 0 {
+            String::from_utf16_lossy(&buffer[..length as usize])
+        } else {
+            let length = K32GetModuleFileNameExW(handle, None, &mut buffer);
+            if length > 0 {
+                let full = String::from_utf16_lossy(&buffer[..length as usize]);
+                full.rsplit(['\\', '/']).next().unwrap_or("").to_string()
+            } else {
+                String::new()
+            }
+        };
+        let _ = CloseHandle(handle);
+        if name.is_empty() { None } else { Some(name) }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn foreground_process_name() -> Option<String> {
+    None
+}
+
+fn foreground_blacklisted(app: &AppHandle) -> bool {
+    let Some(name) = foreground_process_name() else {
+        // A failed lookup must not swallow the capsule; default to allow.
+        return false;
+    };
+    let lowered = name.to_ascii_lowercase();
+    // Compare both with and without the .exe suffix so "KeePassXC" and
+    // "KeePassXC.exe" blacklist entries behave identically.
+    let bare = lowered.strip_suffix(".exe").unwrap_or(&lowered);
+    let entries = blacklist(app);
+    entries.iter().any(|entry| {
+        let entry_bare = entry.strip_suffix(".exe").unwrap_or(entry);
+        lowered == *entry || bare == entry_bare
+    })
+}
+
+// Fullscreen means exclusive or borderless fullscreen. A plain maximised
+// window is never fullscreen: maximisation stops above the taskbar, so its
+// rect is smaller than the monitor rect even when both look "screen sized".
+#[cfg(target_os = "windows")]
+fn foreground_is_fullscreen() -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowRect, GWL_STYLE, WS_CAPTION,
+        WS_THICKFRAME,
+    };
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return false;
+        }
+        // The desktop (Progman) and its wallpaper host (WorkerW) cover every
+        // monitor with no chrome by definition; treating them as fullscreen
+        // would silence the capsule whenever the user copies from the desktop.
+        let mut class_buf = [0u16; 16];
+        let class_len = GetClassNameW(hwnd, &mut class_buf);
+        if class_len > 0 {
+            let class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+            if class == "Progman" || class == "WorkerW" {
+                return false;
+            }
+        }
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return false;
+        }
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            let covers_monitor = rect.left <= info.rcMonitor.left
+                && rect.top <= info.rcMonitor.top
+                && rect.right >= info.rcMonitor.right
+                && rect.bottom >= info.rcMonitor.bottom;
+            // A maximised window reports a "maximised" style bit and never
+            // covers the taskbar area; borderless fullscreen covers it all
+            // while keeping none of the resize/caption chrome.
+            let has_chrome = style & (WS_CAPTION.0 | WS_THICKFRAME.0) as i32 != 0;
+            if covers_monitor && !has_chrome {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn foreground_is_fullscreen() -> bool {
+    false
+}
+
 // Centre the capsule on the monitor that owns the pointer, honouring its DPI
 // scale so the pill keeps the same visual size on mixed-density desktops.
-fn place(window: &WebviewWindow) {
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let monitor = window
-        .cursor_position()
-        .ok()
+fn place(window: &WebviewWindow, mode: PositionMode, fixed: Option<(i32, i32)>) {
+    let cursor = window.cursor_position().ok();
+    let monitor = cursor
+        .as_ref()
         .and_then(|cursor| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten());
     let Some(monitor) = monitor else {
@@ -220,10 +455,65 @@ fn place(window: &WebviewWindow) {
     };
     let origin = monitor.position();
     let size = monitor.size();
-    let width = (WINDOW_WIDTH * scale).round() as i32;
-    let margin = (TOP_MARGIN * scale).round() as i32;
-    let x = origin.x + (size.width as i32 - width) / 2;
-    let y = origin.y + margin;
+    let scale_f = monitor.scale_factor();
+    let width = (WINDOW_WIDTH * scale_f).round() as i32;
+    let height = (WINDOW_HEIGHT * scale_f).round() as i32;
+    let edge = (EDGE_MARGIN * scale_f).round() as i32;
+    let monitor_left = origin.x;
+    let monitor_right = origin.x + size.width as i32;
+    let clamp_x = |x: i32| x.clamp(monitor_left + edge, monitor_right - width - edge);
+    let clamp_y = |y: i32| {
+        y.clamp(
+            origin.y + edge,
+            origin.y + size.height as i32 - height - edge,
+        )
+    };
+    let (x, y) = match mode {
+        PositionMode::Top => {
+            let margin = (TOP_MARGIN * scale_f).round() as i32;
+            (clamp_x(monitor_left + (size.width as i32 - width) / 2), origin.y + margin)
+        }
+        PositionMode::Bottom => {
+            let margin = (TOP_MARGIN * scale_f).round() as i32;
+            (
+                clamp_x(monitor_left + (size.width as i32 - width) / 2),
+                origin.y + size.height as i32 - height - margin,
+            )
+        }
+        PositionMode::Cursor => {
+            let Some(cursor) = cursor else {
+                return;
+            };
+            let offset_x = (CURSOR_OFFSET_X * scale_f).round() as i32;
+            let offset_y = (CURSOR_OFFSET_Y * scale_f).round() as i32;
+            let x = cursor.x as i32 + offset_x;
+            let y = cursor.y as i32 + offset_y;
+            // Shift left/up instead of clamping so the pill never jumps
+            // across the pointer near the screen's right/bottom edge.
+            let x = if x + width + edge > monitor_right {
+                cursor.x as i32 - width - offset_x
+            } else {
+                x
+            };
+            let y = if y + height + edge > origin.y + size.height as i32 {
+                cursor.y as i32 - height - offset_y
+            } else {
+                y
+            };
+            (clamp_x(x), clamp_y(y))
+        }
+        PositionMode::Fixed => match fixed {
+            Some((fixed_x, fixed_y)) => (fixed_x, fixed_y),
+            // No remembered position yet: fall back to the top default.
+            None => {
+                let margin = (TOP_MARGIN * scale_f).round() as i32;
+                (
+                    clamp_x(monitor_left + (size.width as i32 - width) / 2),
+                    origin.y + margin,
+                )
+            }
+        },
+    };
     let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(x, y)));
 }
 
@@ -263,6 +553,30 @@ pub(crate) fn maybe_show(app: &AppHandle, record_type: &str, content: &str) {
     if record_type == "image" || record_type == "file" {
         return;
     }
+    if !setting_flag(app, "capsule_enabled") {
+        return;
+    }
+    // Record the process that was foreground at copy time for the settings
+    // page shortcut, regardless of whether this copy ends up gated.
+    if let Some(name) = foreground_process_name() {
+        if let Ok(mut guard) = LAST_COPY_SOURCE.lock() {
+            *guard = Some(name);
+        }
+    }
+    // Gate order per spec: own-copy exclusion (handled by the caller) >
+    // blacklist > fullscreen > modifier gate > detection. Every gate runs once
+    // per clipboard event; there is no polling anywhere.
+    if foreground_blacklisted(app) {
+        return;
+    }
+    if setting_flag(app, "capsule_fullscreen_enabled") && foreground_is_fullscreen() {
+        return;
+    }
+    if let Some(wanted) = trigger_mode_is_modifier(app) {
+        if !modifier_held(wanted) {
+            return;
+        }
+    }
     let Some(kind) = detect(app, content) else {
         return;
     };
@@ -273,7 +587,9 @@ pub(crate) fn maybe_show(app: &AppHandle, record_type: &str, content: &str) {
     let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
         return;
     };
-    place(&window);
+    let mode = position_mode(app);
+    let fixed = if mode == PositionMode::Fixed { fixed_position(app) } else { None };
+    place(&window, mode, fixed);
     #[cfg(target_os = "windows")]
     ensure_no_activate(&window);
     if window.show().is_err() {
@@ -491,6 +807,58 @@ pub fn reset_capsule_icon(
     crate::db::set_setting(app, kind.icon_setting().to_string(), String::new(), expected_storage_epoch)
 }
 
+// Remembered position for the "fixed" mode. Coordinates are physical screen
+// pixels as reported by the drag in the capsule webview, so no DPI conversion
+// is applied here.
+#[tauri::command]
+pub fn capsule_save_fixed_position(
+    app: AppHandle,
+    x: i32,
+    y: i32,
+    expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    crate::db::set_settings_batch(
+        app,
+        [
+            ("capsule_fixed_x".to_string(), x.to_string()),
+            ("capsule_fixed_y".to_string(), y.to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        expected_storage_epoch,
+    )
+}
+
+#[tauri::command]
+pub fn capsule_reset_fixed_position(
+    app: AppHandle,
+    expected_storage_epoch: Option<u64>,
+) -> Result<(), String> {
+    crate::db::set_settings_batch(
+        app,
+        [
+            ("capsule_fixed_x".to_string(), String::new()),
+            ("capsule_fixed_y".to_string(), String::new()),
+        ]
+        .into_iter()
+        .collect(),
+        expected_storage_epoch,
+    )
+}
+
+// Exposed for the settings page "add current foreground app" shortcut. While
+// settings are open the foreground window is Copy Creator itself, so the
+// caller resolves the process recorded at the moment of the last copy.
+#[tauri::command]
+pub fn capsule_last_copy_source() -> Option<String> {
+    LAST_COPY_SOURCE.lock().ok().and_then(|guard| guard.clone())
+}
+
+#[tauri::command]
+pub fn capsule_blacklist_changed() {
+    BLACKLIST_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,5 +919,32 @@ mod tests {
         assert_eq!(parse_kind("file"), Some(CapsuleKind::File));
         assert_eq!(parse_kind("folder"), Some(CapsuleKind::Folder));
         assert_eq!(parse_kind("other"), None);
+    }
+
+    #[test]
+    fn blacklist_parsing_normalises_entries() {
+        assert!(parse_blacklist("").is_empty());
+        assert!(parse_blacklist(" , ,").is_empty());
+        assert_eq!(parse_blacklist("KeePassXC.exe, cs2"), vec!["keepassxc.exe", "cs2"]);
+        assert_eq!(parse_blacklist("  CHROME.EXE  "), vec!["chrome.exe"]);
+        // Star prefixes from wildcard-style entries are stripped, not matched.
+        assert_eq!(parse_blacklist("*cs2*"), vec!["cs2*"]);
+    }
+
+    #[test]
+    fn blacklist_matching_tolerates_exe_suffix() {
+        let entries = vec!["keepassxc.exe".to_string()];
+        let hit = |name: &str| {
+            let lowered = name.to_ascii_lowercase();
+            let bare = lowered.strip_suffix(".exe").unwrap_or(&lowered);
+            entries.iter().any(|entry| {
+                let entry_bare = entry.strip_suffix(".exe").unwrap_or(entry);
+                lowered == *entry || bare == entry_bare
+            })
+        };
+        assert!(hit("KeePassXC.exe"));
+        assert!(hit("keepassxc"));
+        assert!(!hit("keepassxc2.exe"));
+        assert!(!hit("notepad.exe"));
     }
 }
