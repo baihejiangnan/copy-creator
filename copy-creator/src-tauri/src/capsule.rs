@@ -1,13 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use serde::Serialize;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 pub(crate) const WINDOW_LABEL: &str = "capsule";
 
 pub(crate) const WINDOW_WIDTH: f64 = 460.0;
 pub(crate) const WINDOW_HEIGHT: f64 = 76.0;
+// Expanded height = 76px base + 6px row gap + 120px capped text + 10px shadow room.
+pub(crate) const WINDOW_HEIGHT_EXPANDED: f64 = 212.0;
 const TOP_MARGIN: f64 = 24.0;
 const MAX_SOURCE_CHARS: usize = 2048;
 const MAX_DISPLAY_CHARS: usize = 120;
@@ -28,6 +30,8 @@ const EDGE_MARGIN: f64 = 8.0;
 const BLACKLIST_TTL: Duration = Duration::from_secs(30);
 
 static VISIBLE: AtomicBool = AtomicBool::new(false);
+// Bumped on every clipboard event so a slow path lookup cannot show a stale capsule.
+static COPY_GENERATION: AtomicU64 = AtomicU64::new(0);
 // Re-copying the same target inside this window must not re-open the capsule.
 static LAST_SHOWN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 // Cached lowercase process blacklist; the u64 generation bumps on writes.
@@ -185,23 +189,19 @@ fn normalize_copied_text(text: &str) -> &str {
 }
 
 fn detect_url(text: &str) -> Option<CapsuleKind> {
-    let lower = text.to_lowercase();
-    for prefix in ["http://", "https://"] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            if !rest.trim().is_empty() && !rest.contains(char::is_whitespace) {
-                return Some(CapsuleKind::Url);
-            }
-        }
+    let trimmed = normalize_copied_text(text);
+    if trimmed.is_empty()
+        || trimmed.chars().count() > MAX_SOURCE_CHARS
+        || trimmed.chars().any(char::is_control)
+    {
+        return None;
     }
-    if let Some(rest) = lower.strip_prefix("www.") {
-        if rest.contains('.') && !rest.contains(char::is_whitespace) {
-            return Some(CapsuleKind::Url);
-        }
-    }
-    None
+    detect_url_prefix(trimmed)
 }
 
-fn detect_path(text: &str) -> Option<CapsuleKind> {
+// Pure syntax check; never touches the filesystem, so UNC shares cannot block
+// the clipboard thread. Callers do the metadata lookup off that thread.
+fn path_candidate(text: &str) -> Option<&str> {
     let candidate = text;
     if candidate.contains('\0') {
         return None;
@@ -219,9 +219,11 @@ fn detect_path(text: &str) -> Option<CapsuleKind> {
     let unc = candidate
         .strip_prefix(r"\\")
         .is_some_and(|rest| rest.split('\\').any(|part| !part.is_empty()));
-    if !drive_absolute && !unc {
-        return None;
-    }
+    (drive_absolute || unc).then_some(candidate)
+}
+
+fn detect_path(text: &str) -> Option<CapsuleKind> {
+    let candidate = path_candidate(text)?;
     let metadata = std::fs::metadata(candidate).ok()?;
     if metadata.is_dir() {
         Some(CapsuleKind::Folder)
@@ -232,22 +234,18 @@ fn detect_path(text: &str) -> Option<CapsuleKind> {
     }
 }
 
-fn detect(app: &AppHandle, text: &str) -> Option<CapsuleKind> {
-    let trimmed = normalize_copied_text(text);
-    if trimmed.is_empty()
-        || trimmed.chars().count() > MAX_SOURCE_CHARS
-        || trimmed.chars().any(char::is_control)
-    {
-        return None;
-    }
-    if setting_flag(app, "capsule_url_enabled") {
-        if let Some(kind) = detect_url(trimmed) {
-            return Some(kind);
+fn detect_url_prefix(text: &str) -> Option<CapsuleKind> {
+    let lower = text.to_lowercase();
+    for prefix in ["http://", "https://"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            if !rest.trim().is_empty() && !rest.contains(char::is_whitespace) {
+                return Some(CapsuleKind::Url);
+            }
         }
     }
-    if setting_flag(app, "capsule_path_enabled") {
-        if let Some(kind) = detect_path(trimmed) {
-            return Some(kind);
+    if let Some(rest) = lower.strip_prefix("www.") {
+        if rest.contains('.') && !rest.contains(char::is_whitespace) {
+            return Some(CapsuleKind::Url);
         }
     }
     None
@@ -444,7 +442,9 @@ fn foreground_is_fullscreen() -> bool {
 
 // Centre the capsule on the monitor that owns the pointer, honouring its DPI
 // scale so the pill keeps the same visual size on mixed-density desktops.
-fn place(window: &WebviewWindow, mode: PositionMode, fixed: Option<(i32, i32)>) {
+// `expanded` grows the window downward from the same anchor so the full text
+// bubble fits instead of being clipped by the 76px window.
+fn place(window: &WebviewWindow, mode: PositionMode, fixed: Option<(i32, i32)>, expanded: bool) {
     let cursor = window.cursor_position().ok();
     let monitor = cursor
         .as_ref()
@@ -457,7 +457,12 @@ fn place(window: &WebviewWindow, mode: PositionMode, fixed: Option<(i32, i32)>) 
     let size = monitor.size();
     let scale_f = monitor.scale_factor();
     let width = (WINDOW_WIDTH * scale_f).round() as i32;
-    let height = (WINDOW_HEIGHT * scale_f).round() as i32;
+    let base_height = (WINDOW_HEIGHT * scale_f).round() as i32;
+    let height = if expanded {
+        (WINDOW_HEIGHT_EXPANDED * scale_f).round() as i32
+    } else {
+        base_height
+    };
     let edge = (EDGE_MARGIN * scale_f).round() as i32;
     let monitor_left = origin.x;
     let monitor_right = origin.x + size.width as i32;
@@ -514,7 +519,13 @@ fn place(window: &WebviewWindow, mode: PositionMode, fixed: Option<(i32, i32)>) 
             }
         },
     };
-    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(x, y)));
+    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+        width as u32,
+        height as u32,
+    )));
+    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        x, y,
+    )));
 }
 
 pub(crate) fn is_visible() -> bool {
@@ -524,6 +535,13 @@ pub(crate) fn is_visible() -> bool {
 pub(crate) fn hide(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
         let _ = window.hide();
+        // The next show starts collapsed; leaving the expanded height would
+        // reserve an invisible click-blocking strip below the pill.
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+            (WINDOW_WIDTH * scale).round() as u32,
+            (WINDOW_HEIGHT * scale).round() as u32,
+        )));
     }
     VISIBLE.store(false, Ordering::SeqCst);
 }
@@ -553,6 +571,8 @@ pub(crate) fn maybe_show(app: &AppHandle, record_type: &str, content: &str) {
     if record_type == "image" || record_type == "file" {
         return;
     }
+    // Every clipboard event invalidates a path probe still running for an older copy.
+    let generation = COPY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     if !setting_flag(app, "capsule_enabled") {
         return;
     }
@@ -577,10 +597,42 @@ pub(crate) fn maybe_show(app: &AppHandle, record_type: &str, content: &str) {
             return;
         }
     }
-    let Some(kind) = detect(app, content) else {
-        return;
-    };
     let target = normalize_copied_text(content);
+    if target.is_empty()
+        || target.chars().count() > MAX_SOURCE_CHARS
+        || target.chars().any(char::is_control)
+    {
+        return;
+    }
+    if setting_flag(app, "capsule_url_enabled") {
+        if let Some(kind) = detect_url_prefix(target) {
+            show_kind(app, kind, target, generation);
+            return;
+        }
+    }
+    if setting_flag(app, "capsule_path_enabled") {
+        let Some(candidate) = path_candidate(target) else {
+            return;
+        };
+        let candidate = candidate.to_string();
+        let app = app.clone();
+        // Metadata on a UNC share or a sleeping drive can block for seconds.
+        // Probing off the clipboard thread keeps capture, the lifecycle producer
+        // and the save barrier free; a newer copy invalidates this result.
+        tauri::async_runtime::spawn_blocking(move || {
+            let Some(kind) = detect_path(&candidate) else {
+                return;
+            };
+            show_kind(&app, kind, &candidate, generation);
+        });
+    }
+}
+
+// Bumped on every clipboard event; a delayed probe must not show stale content.
+fn show_kind(app: &AppHandle, kind: CapsuleKind, target: &str, generation: u64) {
+    if COPY_GENERATION.load(Ordering::SeqCst) != generation {
+        return;
+    }
     if is_duplicate(kind, target) {
         return;
     }
@@ -588,8 +640,12 @@ pub(crate) fn maybe_show(app: &AppHandle, record_type: &str, content: &str) {
         return;
     };
     let mode = position_mode(app);
-    let fixed = if mode == PositionMode::Fixed { fixed_position(app) } else { None };
-    place(&window, mode, fixed);
+    let fixed = if mode == PositionMode::Fixed {
+        fixed_position(app)
+    } else {
+        None
+    };
+    place(&window, mode, fixed, false);
     #[cfg(target_os = "windows")]
     ensure_no_activate(&window);
     if window.show().is_err() {
@@ -605,6 +661,23 @@ pub(crate) fn maybe_show(app: &AppHandle, record_type: &str, content: &str) {
     if let Err(error) = window.emit("capsule-show", payload) {
         log::warn!("failed to emit capsule-show: {error}");
     }
+}
+
+// The webview asks for the taller window before painting the full-text bubble.
+#[tauri::command]
+pub fn capsule_set_expanded(app: AppHandle, expanded: bool) {
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        return;
+    };
+    let mode = position_mode(&app);
+    let fixed = if mode == PositionMode::Fixed {
+        fixed_position(&app)
+    } else {
+        None
+    };
+    place(&window, mode, fixed, expanded);
+    #[cfg(target_os = "windows")]
+    ensure_no_activate(&window);
 }
 
 #[cfg(target_os = "windows")]
@@ -879,6 +952,28 @@ mod tests {
         assert_eq!(detect_path("shell:AppsFolder"), None);
         assert_eq!(detect_path("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"), None);
         assert_eq!(detect_path(r"C:\definitely\missing\path\for\capsule\test"), None);
+    }
+
+    #[test]
+    fn path_candidate_accepts_absolute_paths_without_touching_disk() {
+        assert_eq!(
+            path_candidate(r"C:\Windows\win.ini"),
+            Some(r"C:\Windows\win.ini")
+        );
+        assert_eq!(path_candidate("D:/data"), Some("D:/data"));
+        assert_eq!(
+            path_candidate(r"\\server\share\file.txt"),
+            Some(r"\\server\share\file.txt")
+        );
+        // Syntax only: an unreachable UNC share must still pass this gate so the
+        // metadata probe can run off the clipboard thread.
+        assert_eq!(
+            path_candidate(r"\\offline-host\share\file.txt"),
+            Some(r"\\offline-host\share\file.txt")
+        );
+        assert_eq!(path_candidate("relative\\path"), None);
+        assert_eq!(path_candidate(r"\\"), None);
+        assert_eq!(path_candidate("shell:AppsFolder"), None);
     }
 
     #[test]

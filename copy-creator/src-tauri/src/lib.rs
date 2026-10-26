@@ -479,6 +479,7 @@ pub fn run() {
             capsule::capsule_reset_fixed_position,
             capsule::capsule_last_copy_source,
             capsule::capsule_blacklist_changed,
+            capsule::capsule_set_expanded,
             updates::get_app_info,
             updates::check_for_updates,
             updates::download_update,
